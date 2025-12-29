@@ -149,6 +149,11 @@
   <ItemGroup>
     <ClCompile Include="driver.c" />
   </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\DriverHookCodeLib\DriverHookCodeLib.vcxproj">
+      <Project>{39cd92b6-39dd-43a8-9688-64fac74a694e}</Project>
+    </ProjectReference>
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>

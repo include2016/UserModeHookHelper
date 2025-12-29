@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <shlwapi.h>
 #include <intrin.h>
+#include <windowsx.h>
 #include "resource.h"
 #include "HookServices.h"
 #include "KmhhCtx.h"
@@ -28,7 +29,6 @@
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "Shlwapi.lib")
 
-namespace {
 	struct HookSequenceEntry {
 		std::wstring module;
 		std::wstring offset;
@@ -51,10 +51,15 @@ namespace {
 		std::vector<HookRow> persisted;
 	};
 
+		constexpr UINT kCmdHookRemove = 0x4000;
+		constexpr UINT kCmdHookEnable = 0x4001;
+		constexpr UINT kCmdHookDisable = 0x4002;
+
 	static const wchar_t kPluginBaseKey[] = REG_PERSIST_SUBKEY L"\\Plugins\\KrnlModeHookHlp";
 	static const wchar_t kPluginHookValue[] = L"HookList";
 	static const wchar_t kPluginBootValue[] = L"CacheBootTime";
 
+	void UpdateHookList(HWND list, const std::vector<HookSequenceResult>& results);
 	std::wstring BuildAddressSubKeyName(ULONGLONG address) {
 		wchar_t suffix[32];
 		_snwprintf_s(suffix, _TRUNCATE, L"Hook_%016llX", address);
@@ -338,6 +343,62 @@ namespace {
 	HWND g_hDialog = nullptr;
 	HWND g_hHookList = nullptr;
 	IHookServices* g_services = nullptr;
+	HMENU g_hHookListMenu = nullptr;
+
+	bool RestoreOriginalCode(const HookRow& row) {
+		if (row.ori_asm_code_len == 0 || row.ori_asm_code_addr == 0 || row.address == 0) {
+			return false;
+		}
+		std::vector<UCHAR> buffer(row.ori_asm_code_len);
+		if (!KRNL::ReadPrimitive(reinterpret_cast<LPVOID>(row.ori_asm_code_addr), buffer.data(), row.ori_asm_code_len)) {
+			KMHHLog(L"Failed to read original instruction bytes for hook 0x%llX", row.address);
+			return false;
+		}
+		if (!KRNL::WritePrimitive(reinterpret_cast<LPVOID>(row.address), buffer.data(), row.ori_asm_code_len)) {
+			KMHHLog(L"Failed to restore original instruction bytes for hook 0x%llX", row.address);
+			return false;
+		}
+		return true;
+	}
+
+	void RefreshHookListFromPersistence() {
+		if (!g_hHookList) return;
+		std::vector<HookRow> cachedRows;
+		if (!LoadPersistedHookRows(0, cachedRows)) {
+			return;
+		}
+		std::vector<HookSequenceResult> results;
+		results.reserve(cachedRows.size());
+		for (const auto& row : cachedRows) {
+			HookSequenceResult res;
+			res.row = row;
+			res.success = true;
+			res.status = L"Active";
+			results.push_back(std::move(res));
+		}
+		UpdateHookList(g_hHookList, results);
+	}
+
+	bool RemovePersistedHook(ULONGLONG address) {
+		if (!address) return false;
+		std::vector<HookRow> rows;
+		if (!LoadPersistedHookRows(0, rows)) {
+			return false;
+		}
+		auto it = std::find_if(rows.begin(), rows.end(), [&](const HookRow& r) { return r.address == address; });
+		if (it == rows.end()) {
+			return false;
+		}
+		if (!RestoreOriginalCode(*it)) {
+			return false;
+		}
+		rows.erase(it);
+		if (!SavePersistedHookRows(0, rows)) {
+			KMHHLog(L"Failed to persist hook removal for 0x%llX", address);
+			return false;
+		}
+		return true;
+	}
 
 	void EnsureCommonControls() {
 		static bool initialized = false;
@@ -786,16 +847,22 @@ namespace {
 			ULONGLONG addr = res.success ? res.row.address : res.address;
 			if (addr) swprintf(addrBuf, _countof(addrBuf), L"0x%llX", addr);
 			std::wstring targetText = res.success ? res.row.expFunc : (res.entry.module + L"+" + res.entry.offset);
-			PVOID module_base = NULL;
-			CHAR a[MAX_PATH] = { 0 };
-			Helper::ConvertWcharToChar(res.row.module.c_str(), a, MAX_PATH);
-			KRNL::GetDriverBase(a, &module_base);
-			wchar_t b[MAX_PATH] = { 0 };
-			swprintf(b, _countof(b), L"0x%x", (DWORD)(addr - (DWORD64)module_base));
-			std::wstring modoffText = res.row.module + L"+" + b;
+			std::wstring modoffText = res.success ? res.row.module : res.entry.module;
+			if (!modoffText.empty() && addr && res.success) {
+				PVOID module_base = nullptr;
+				CHAR moduleName[MAX_PATH] = {};
+				if (Helper::ConvertWcharToChar(res.row.module.c_str(), moduleName, MAX_PATH) &&
+					KRNL::GetDriverBase(moduleName, &module_base) == 0 && module_base) {
+					wchar_t offsetText[MAX_PATH] = {};
+					swprintf(offsetText, _countof(offsetText), L"0x%llX", static_cast<unsigned long long>(addr - reinterpret_cast<ULONG_PTR>(module_base)));
+					modoffText.append(L"+");
+					modoffText.append(offsetText);
+				}
+			}
 			LVITEMW item{};
-			item.mask = LVIF_TEXT;
+			item.mask = LVIF_TEXT | LVIF_PARAM;
 			item.pszText = const_cast<LPWSTR>(idText.c_str());
+			item.lParam = static_cast<LPARAM>(addr);
 			int rowIndex = ListView_InsertItem(list, &item);
 			ListView_SetItemText(list, rowIndex, 1, addrBuf);
 			ListView_SetItemText(list, rowIndex, 2, const_cast<LPWSTR>(targetText.c_str()));
@@ -803,6 +870,7 @@ namespace {
 			ListView_SetItemText(list, rowIndex, 4, const_cast<LPWSTR>(res.status.c_str()));
 		}
 	}
+	
 
 	void HandleApplySequence(HWND hwnd) {
 		if (!g_services) {
@@ -874,7 +942,19 @@ namespace {
 
 		if (overallSuccess) {
 			PersistHookRows(ctx);
-			UpdateHookList(g_hHookList, results);
+			std::vector<HookSequenceResult> display;
+			display.reserve(ctx.persisted.size());
+			for (const auto& persistedRow : ctx.persisted) {
+				HookSequenceResult res;
+				res.row = persistedRow;
+				res.success = true;
+				bool newlyApplied = std::any_of(appliedThisRun.begin(), appliedThisRun.end(), [&](const HookRow& r) {
+					return r.id == persistedRow.id;
+				});
+				res.status = newlyApplied ? L"Applied" : L"Active";
+				display.push_back(std::move(res));
+			}
+			UpdateHookList(g_hHookList, display);
 			wchar_t msg[128];
 			swprintf(msg, _countof(msg), L"Applied %zu hooks.", appliedThisRun.size());
 			MessageBoxW(hwnd, msg, L"Hook Sequence", MB_OK | MB_ICONINFORMATION);
@@ -890,18 +970,14 @@ namespace {
 			HWND hList = GetDlgItem(hDlg, IDC_KMHH_LIST_HOOKS);
 			SetupHookListColumns(hList);
 			g_hHookList = hList;
-			// Populate hook list from cache
-			std::vector<HookRow> cachedRows;
-			LoadPersistedHookRows(0, cachedRows);
-			std::vector<HookSequenceResult> results;
-			for (const auto& row : cachedRows) {
-				HookSequenceResult res;
-				res.row = row;
-				res.success = true;
-				res.status = L"Persisted";
-				results.push_back(res);
+			// Build hook list context menu
+			g_hHookListMenu = CreatePopupMenu();
+			if (g_hHookListMenu) {
+				AppendMenuW(g_hHookListMenu, MF_STRING, kCmdHookRemove, L"Remove");
+				AppendMenuW(g_hHookListMenu, MF_STRING, kCmdHookEnable, L"Enable");
+				AppendMenuW(g_hHookListMenu, MF_STRING, kCmdHookDisable, L"Disable");
 			}
-			UpdateHookList(hList, results);
+			RefreshHookListFromPersistence();
 			CenterRelativeToParent(hDlg, ctx ? ctx->parent : nullptr);
 			return TRUE;
 		}
@@ -913,6 +989,121 @@ namespace {
 			case IDCANCEL:
 				DestroyWindow(hDlg);
 				return TRUE;
+			case kCmdHookRemove:
+			{
+				if (!g_hHookList) return TRUE;
+				int sel = ListView_GetNextItem(g_hHookList, -1, LVNI_SELECTED);
+				if (sel < 0) {
+					MessageBoxW(hDlg, L"Select a hook first.", L"Remove Hook", MB_ICONINFORMATION);
+					return TRUE;
+				}
+				LVITEMW item{};
+				item.mask = LVIF_PARAM;
+				item.iItem = sel;
+				if (!ListView_GetItem(g_hHookList, &item)) {
+					return TRUE;
+				}
+				ULONGLONG address = static_cast<ULONGLONG>(static_cast<ULONG_PTR>(item.lParam));
+				if (!address) {
+					return TRUE;
+				}
+
+				// remove hook but no deletion
+				std::vector<HookRow> cachedRows;
+				if (!LoadPersistedHookRows(0, cachedRows)) {
+					KMHHLog(L"failed to call LoadPersistedHookRows\n");
+					return TRUE;
+				}
+				auto it = std::find_if(cachedRows.begin(), cachedRows.end(), [&](const HookRow& row) {
+					return row.address == address;
+				});
+				if (it == cachedRows.end()) {
+					KMHHLog(L"FATAL error, no HookRow found for target Address=0x%p\n", address);
+					return true;
+				}
+
+				if (MessageBoxW(hDlg, L"Remove the selected hook?", L"Remove Hook", MB_ICONQUESTION | MB_YESNO) != IDYES) {
+					return TRUE;
+				}
+				UCHAR* ori_asm_code = (UCHAR*)malloc(it->ori_asm_code_len);
+				KRNL::ReadPrimitive((LPVOID)it->ori_asm_code_addr, ori_asm_code, it->ori_asm_code_len);
+				KRNL::WritePrimitive((LPVOID)it->address, ori_asm_code, it->ori_asm_code_len);
+				KMHHLog(L"hook point at 0x%p is removed\n", it->address);
+				if (RemovePersistedHook(address)) {
+					RefreshHookListFromPersistence();
+					MessageBoxW(hDlg, L"Hook removed and persisted.", L"Remove Hook", MB_OK | MB_ICONINFORMATION);
+				}
+				else {
+					MessageBoxW(hDlg, L"Failed to remove hook.", L"Remove Hook", MB_OK | MB_ICONERROR);
+				}
+			}
+			return TRUE;
+			case kCmdHookEnable:
+			{
+				int sel = ListView_GetNextItem(g_hHookList, -1, LVNI_SELECTED);
+				std::vector<HookRow> cachedRows;
+				if (!LoadPersistedHookRows(0, cachedRows)) {
+					KMHHLog(L"failed to call LoadPersistedHookRows\n");
+					return true;
+				}
+
+				LVITEMW item{};
+				item.mask = LVIF_PARAM;
+				item.iItem = sel;
+				if (!ListView_GetItem(g_hHookList, &item)) {
+					return TRUE;
+				}
+				ULONGLONG address = static_cast<ULONGLONG>(static_cast<ULONG_PTR>(item.lParam));
+				auto it = std::find_if(cachedRows.begin(), cachedRows.end(), [&](const HookRow& row) {
+					return row.address == address;
+				});
+				if (it == cachedRows.end()) {
+					KMHHLog(L"FATAL error, no HookRow found for target Address=0x%p\n", address);
+					return true;
+				}
+
+				// remove hook but no deletion
+				UCHAR ff25[ff25jmpsize] = { 0xff,0x25,0,0,0,0 };
+				*(DWORD*)(ff25 + ff25_opcode_size) = (DWORD)((DWORD64)it->trampoline_pit - ((DWORD64)it->address + ff25jmpsize));
+				if (!KRNL::WritePrimitive((PVOID)it->address, (void*)(ff25), ff25jmpsize)) {
+					KMHHLog(L"kCmdHookEnable line number: %d\n", __LINE__);
+					return FALSE;
+				}
+				KMHHLog(L"hook point at 0x%p is enabled\n", it->address);
+			}
+			return TRUE;
+			case kCmdHookDisable:
+			{
+
+				int sel = ListView_GetNextItem(g_hHookList, -1, LVNI_SELECTED);
+				std::vector<HookRow> cachedRows;
+				if (!LoadPersistedHookRows(0, cachedRows)) {
+					KMHHLog(L"failed to call LoadPersistedHookRows\n");
+					return TRUE;
+				}
+
+				LVITEMW item{};
+				item.mask = LVIF_PARAM;
+				item.iItem = sel;
+				if (!ListView_GetItem(g_hHookList, &item)) {
+					return TRUE;
+				}
+				ULONGLONG address = static_cast<ULONGLONG>(static_cast<ULONG_PTR>(item.lParam));
+				auto it = std::find_if(cachedRows.begin(), cachedRows.end(), [&](const HookRow& row) {
+					return row.address == address;
+				});
+				if (it == cachedRows.end()) {
+					KMHHLog(L"FATAL error, no HookRow found for target Address=0x%p\n", address);
+					return true;
+				}
+
+				// remove hook but no deletion
+				UCHAR* ori_asm_code = (UCHAR*)malloc(it->ori_asm_code_len);
+				KRNL::ReadPrimitive((LPVOID)it->ori_asm_code_addr, ori_asm_code, it->ori_asm_code_len);
+				KRNL::WritePrimitive((LPVOID)it->address, ori_asm_code, it->ori_asm_code_len);
+				KMHHLog(L"hook point at 0x%p is disabled\n", it->address);
+			}
+			return TRUE;
 			default:
 				break;
 			}
@@ -923,12 +1114,29 @@ namespace {
 		case WM_DESTROY:
 			if (g_hDialog == hDlg) g_hDialog = nullptr;
 			g_hHookList = nullptr;
+			if (g_hHookListMenu) {
+				DestroyMenu(g_hHookListMenu);
+				g_hHookListMenu = nullptr;
+			}
 			return TRUE;
+		case WM_CONTEXTMENU:
+			if (reinterpret_cast<HWND>(wParam) == g_hHookList && g_hHookListMenu) {
+				POINT pt{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+				POINT clientPt = pt;
+				ScreenToClient(g_hHookList, &clientPt);
+				LVHITTESTINFO ht{};
+				ht.pt = clientPt;
+				int hit = ListView_HitTest(g_hHookList, &ht);
+				if (hit >= 0) {
+					ListView_SetItemState(g_hHookList, hit, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+				}
+				TrackPopupMenu(g_hHookListMenu, TPM_RIGHTBUTTON | TPM_LEFTALIGN, pt.x, pt.y, 0, hDlg, nullptr);
+				return TRUE;
+			}
+			break;
 		}
 		return FALSE;
 	}
-}
-
 extern "C" __declspec(dllexport) void PluginMain(HWND parentHwnd, IHookServices* services) {
 	KmhhCtx_SetHookServices(services);
 

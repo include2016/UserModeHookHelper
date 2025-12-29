@@ -34,6 +34,12 @@
       <Platform>ARM64</Platform>
     </ProjectConfiguration>
   </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="DriverHCLib.c" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="DriverHCLib.h" />
+  </ItemGroup>
   <PropertyGroup Label="Globals">
     <ProjectGuid>{39CD92B6-39DD-43A8-9688-64FAC74A694E}</ProjectGuid>
     <TemplateGuid>{0a049372-4c4d-4ea0-a64e-dc6ad88ceca1}</TemplateGuid>
