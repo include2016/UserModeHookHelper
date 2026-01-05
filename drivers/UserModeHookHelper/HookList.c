@@ -510,7 +510,7 @@ NTSTATUS HookList_LoadFromRegistry(VOID) {
         // Compute hash using shared kernel helper
         ULONGLONG h = SL_ComputeNtPathHash((const PUCHAR)p, wcslen(p) * sizeof(WCHAR));
         // Add entry (idempotent)
-        HookList_AddEntry(h, p, len);
+        HookList_AddEntry(h, p, len,0,0);
         p = (PWCHAR)((PUCHAR)p + len);
     }
 
