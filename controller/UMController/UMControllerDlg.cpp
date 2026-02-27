@@ -1529,7 +1529,8 @@ LRESULT CUMControllerDlg::OnUpdateProcess(WPARAM wParam, LPARAM lParam) {
 		if (gh)
 			inHook = true;
 		else
-			inHook = m_Filter.FLTCOMM_CheckHookList(e.path);
+			if(!e.path.empty())
+				inHook = m_Filter.FLTCOMM_CheckHookList(e.path);
 		if (e.forced)
 			inHook = true;
 		std::wstring path = e.path;
