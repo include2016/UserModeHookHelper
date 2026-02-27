@@ -6,15 +6,6 @@
 *.sln.docstates
 *.aps
 
-# Visual C++ build results
-[Bb]in/
-[Oo]bj/
-x64/
-x86/
-*/x64/
-*/x86/
-*/Debug/
-*/Release/
 
 # Intermediate files
 *.obj
@@ -82,3 +73,17 @@ examples/
 ARM
 
 /hook_code_examples/private_hook_code/private_code
+
+!hook_component/kmhh.trampoline.sys/
+!hook_component/kmhh.trampoline.sys/**
+
+
+# Visual C++ build results
+[Bb]in/
+[Oo]bj/
+x64/
+x86/
+*/x64/
+*/x86/
+*/Debug/
+*/Release/

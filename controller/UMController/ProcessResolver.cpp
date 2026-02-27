@@ -59,7 +59,6 @@ void ProcessResolver::StartLoaderResolver(CUMControllerDlg* dlg, const std::vect
 				::PostMessage(dlg->GetSafeHwnd(), WM_APP_UPDATE_PROCESS, (WPARAM)pid, 0);
 				continue;
 			}
-			
 			bool inHook = false;
 			// If Global Hook Mode is enabled, consider all processes as 'inHook' for
 			// purposes of checking master DLL presence. However, actual additions to
@@ -70,11 +69,7 @@ void ProcessResolver::StartLoaderResolver(CUMControllerDlg* dlg, const std::vect
 				inHook = true;
 			}
 			else {
-				// if havePath is ture but ntPath is empty, we will skip this process
-				// I found a process named "Secure System" has no image path, while its pid is not 0 or 4
-				// in my case, its pid is 64
-				if (!ntPath.empty())
-					inHook = filter->FLTCOMM_CheckHookList(ntPath);
+				inHook = filter->FLTCOMM_CheckHookList(ntPath);
 			}
 			std::wstring cmdline;
 			Helper::GetProcessCommandLineByPID(pid, cmdline);

@@ -14,9 +14,6 @@
 // Hook core logging (can still use LogCore directly if desired)
 #define LOG_CORE(svcs, fmt, ...) (svcs)->LogCore(L"" fmt, __VA_ARGS__)
 
-// for AV plugin log
-#define LOG_AV(svcs, fmt, ...)   (svcs)->Log(L"[AV    ]     " fmt, __VA_ARGS__)
-
 // Direct controller ETW logging when an IHookServices* is not available but global 'app' is.
 // Use in UMController sources: LOG_CTRL_ETW(L"message %d", val);
 #ifdef _UMCONTROLLER_ENV_DEFINED // Optionally gate if you define this in project settings

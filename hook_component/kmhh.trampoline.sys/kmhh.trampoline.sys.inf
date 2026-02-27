@@ -1,0 +1,86 @@
+;
+; kmhh.trampoline.sys.inf
+;
+
+[Version]
+Signature="$WINDOWS NT$"
+Class=Sample ; TODO: edit Class
+ClassGuid={78A1C341-4539-11d3-B88D-00C04FAD5171} ; TODO: edit ClassGuid
+Provider=%ManufacturerName%
+CatalogFile=kmhh.trampoline.sys.cat
+DriverVer= ; TODO: set DriverVer in stampinf property pages
+
+[DestinationDirs]
+DefaultDestDir = 12
+kmhh.trampoline.sys_Device_CoInstaller_CopyFiles = 11
+
+; ================= Class section =====================
+
+[ClassInstall32]
+Addreg=SampleClassReg
+
+[SampleClassReg]
+HKR,,,0,%ClassName%
+HKR,,Icon,,-5
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+kmhh.trampoline.sys.sys  = 1,,
+WdfCoInstaller$KMDFCOINSTALLERVERSION$.dll=1 ; make sure the number matches with SourceDisksNames
+
+;*****************************************
+; Install Section
+;*****************************************
+
+[Manufacturer]
+%ManufacturerName%=Standard,NT$ARCH$
+
+[Standard.NT$ARCH$]
+%kmhh.trampoline.sys.DeviceDesc%=kmhh.trampoline.sys_Device, Root\kmhh.trampoline.sys ; TODO: edit hw-id
+
+[kmhh.trampoline.sys_Device.NT]
+CopyFiles=Drivers_Dir
+
+[Drivers_Dir]
+kmhh.trampoline.sys.sys
+
+;-------------- Service installation
+[kmhh.trampoline.sys_Device.NT.Services]
+AddService = kmhh.trampoline.sys,%SPSVCINST_ASSOCSERVICE%, kmhh.trampoline.sys_Service_Inst
+
+; -------------- kmhh.trampoline.sys driver install sections
+[kmhh.trampoline.sys_Service_Inst]
+DisplayName    = %kmhh.trampoline.sys.SVCDESC%
+ServiceType    = 1               ; SERVICE_KERNEL_DRIVER
+StartType      = 3               ; SERVICE_DEMAND_START
+ErrorControl   = 1               ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %12%\kmhh.trampoline.sys.sys
+
+;
+;--- kmhh.trampoline.sys_Device Coinstaller installation ------
+;
+
+[kmhh.trampoline.sys_Device.NT.CoInstallers]
+AddReg=kmhh.trampoline.sys_Device_CoInstaller_AddReg
+CopyFiles=kmhh.trampoline.sys_Device_CoInstaller_CopyFiles
+
+[kmhh.trampoline.sys_Device_CoInstaller_AddReg]
+HKR,,CoInstallers32,0x00010000, "WdfCoInstaller$KMDFCOINSTALLERVERSION$.dll,WdfCoInstaller"
+
+[kmhh.trampoline.sys_Device_CoInstaller_CopyFiles]
+WdfCoInstaller$KMDFCOINSTALLERVERSION$.dll
+
+[kmhh.trampoline.sys_Device.NT.Wdf]
+KmdfService =  kmhh.trampoline.sys, kmhh.trampoline.sys_wdfsect
+[kmhh.trampoline.sys_wdfsect]
+KmdfLibraryVersion = $KMDFVERSION$
+
+[Strings]
+SPSVCINST_ASSOCSERVICE= 0x00000002
+ManufacturerName="<Your manufacturer name>" ;TODO: Replace with your manufacturer name
+ClassName="Samples" ; TODO: edit ClassName
+DiskName = "kmhh.trampoline.sys Installation Disk"
+kmhh.trampoline.sys.DeviceDesc = "kmhh.trampoline.sys Device"
+kmhh.trampoline.sys.SVCDESC = "kmhh.trampoline.sys Service"
