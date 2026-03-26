@@ -21,6 +21,7 @@
 #include <unordered_set>
 #include "IPC.h"
 #include "RemoveHookDlg.h"
+#include "RemoveEarlyBreakDlg.h"
 #include "RemoveWhitelistDlg.h"
 #include "RegistryStore.h"
 #include "HookInterfaces.h" // services adapter remains local; dialog now in HookUI DLL
@@ -338,6 +339,8 @@ BEGIN_MESSAGE_MAP(CUMControllerDlg, CDialogEx)
 	ON_COMMAND(ID_MENU_REMOVE_HOOK_SINGLE, &CUMControllerDlg::OnRemoveHook)
 	ON_COMMAND(ID_MENU_INJECT_DLL, &CUMControllerDlg::OnInjectDll)
 	ON_COMMAND(ID_MENU_ADD_EXE, &CUMControllerDlg::OnAddExecutableToHookList)
+	ON_COMMAND(ID_TOOLS_ADD_EARLY_BREAK, &CUMControllerDlg::OnAddExecutableToEarlyBreakList)
+	ON_COMMAND(ID_TOOLS_REMOVE_EARLY_BREAK, &CUMControllerDlg::OnRemoveExecutableFromEarlyBreakList)
 	ON_COMMAND(ID_MENU_CLEAR_ETW, &CUMControllerDlg::OnClearEtwLog)
 	ON_COMMAND(ID_MENU_OPEN_ETW_LOG, &CUMControllerDlg::OnOpenEtwLog)
 	ON_COMMAND(ID_MENU_MARK_EARLY_BREAK, &CUMControllerDlg::OnMarkEarlyBreak)
@@ -2465,6 +2468,122 @@ void CUMControllerDlg::OnRemoveExecutablesFromHookList() {
 		// Dialog already performed removals and updated PM
 		// Optionally refresh UI here
 	}
+}
+
+void CUMControllerDlg::OnAddExecutableToEarlyBreakList() {
+	// Prompt user to select an executable file
+	CFileDialog dlg(TRUE, L"exe", NULL, OFN_FILEMUSTEXIST | OFN_HIDEREADONLY,
+		L"Executable Files (*.exe)|*.exe|All Files (*.*)|*.*||", this);
+	if (dlg.DoModal() != IDOK) return;
+
+	CString exePath = dlg.GetPathName();
+	
+	// Convert to NT path
+	std::wstring dosPath = exePath.GetString();
+	std::wstring ntPath;
+	if (!Helper::ResolveDosPathToNtPath(dosPath, ntPath)) {
+		MessageBox(L"Failed to convert path to NT format.", L"Error", MB_ICONERROR);
+		return;
+	}
+	
+	// Convert to lowercase for consistent comparison
+	std::wstring ntPathLower = ntPath;
+	std::transform(ntPathLower.begin(), ntPathLower.end(), ntPathLower.begin(), ::towlower);
+	
+	// Add to in-memory set
+	m_EarlyBreakSet.insert(ntPathLower);
+	
+	// Persist to registry
+	if (!RegistryStore::AddEarlyBreakMark(ntPathLower)) {
+		app.GetETW().Log(L"OnAddExecutableToEarlyBreakList: Failed to persist EarlyBreak mark for %s\n", ntPathLower.c_str());
+		MessageBox(L"Failed to persist EarlyBreak mark to registry.", L"Warning", MB_ICONWARNING);
+	}
+	
+	// Create early break signal file so umhh.dll knows to break
+	const UCHAR* bytes = reinterpret_cast<const UCHAR*>(ntPath.c_str());
+	size_t len = ntPath.size() * sizeof(wchar_t);
+	unsigned long long hval = Helper::GetNtPathHash(bytes, len);
+	WCHAR pathBuf[MAX_PATH] = { 0 };
+	_snwprintf_s(pathBuf, RTL_NUMBER_OF(pathBuf), USER_MODE_EARLY_BREAK_SIGNAL_FILE_FMT, hval);
+	HANDLE hfile;
+	if (!Helper::CreateLowPrivReqFile(pathBuf, &hfile)) {
+		app.GetETW().Log(L"OnAddExecutableToEarlyBreakList: Failed to create early break signal file path=%s\n", pathBuf);
+		MessageBox(L"Failed to create early break signal file.", L"Error", MB_ICONERROR);
+		return;
+	}
+	CloseHandle(hfile);
+	app.GetETW().Log(L"OnAddExecutableToEarlyBreakList: Created early break signal file path=%s\n", pathBuf);
+	
+	// Refresh UI to show the star for matching processes
+	FilterProcessList(m_CurrentFilterString);
+	
+	// Warn user if Global Hook Mode is not enabled
+	if (!IsGlobalHookModeEnabled()) {
+		MessageBox(
+			L"Note: Global Hook Mode is currently disabled. "
+			L"To use the EarlyBreak feature effectively, please enable Global Hook Mode from the Extra menu.\n\n"
+			L"The executable has been added to the EarlyBreak list and will be marked when Global Hook Mode is enabled.",
+			L"Warning",
+			MB_ICONWARNING | MB_OK
+		);
+	}
+	
+	CString msg;
+	msg.Format(L"Added to EarlyBreak list:\n%s", ntPath.c_str());
+	MessageBox(msg, L"EarlyBreak List Updated", MB_ICONINFORMATION);
+}
+
+void CUMControllerDlg::OnRemoveExecutableFromEarlyBreakList() {
+	// Show dialog to select executable to remove from EarlyBreak list
+	if (m_EarlyBreakSet.empty()) {
+		MessageBox(L"No executables in EarlyBreak list.", L"Information", MB_ICONINFORMATION);
+		return;
+	}
+	
+	// Build list of NT paths from the set
+	std::vector<std::wstring> paths(m_EarlyBreakSet.begin(), m_EarlyBreakSet.end());
+	
+	// Create selection dialog
+	CRemoveEarlyBreakDlg dlg(paths, this);
+	if (dlg.DoModal() != IDOK) return;
+	
+	// Remove selected items from in-memory set and registry
+	bool anyRemoved = false;
+	for (int idx : dlg.m_selectedIndices) {
+		if (idx >= 0 && idx < (int)paths.size()) {
+			const std::wstring& selected = paths[idx];
+			m_EarlyBreakSet.erase(selected);
+			
+			// Remove from registry
+			if (!RegistryStore::RemoveEarlyBreakMark(selected)) {
+				app.GetETW().Log(L"OnRemoveExecutableFromEarlyBreakList: RegistryStore::RemoveEarlyBreakMark failed for %s\n", selected.c_str());
+			} else {
+				anyRemoved = true;
+				
+				// Delete early break signal file
+				const UCHAR* bytes = reinterpret_cast<const UCHAR*>(selected.c_str());
+				size_t len = selected.size() * sizeof(wchar_t);
+				unsigned long long hval = Helper::GetNtPathHash(bytes, len);
+				WCHAR pathBuf[MAX_PATH] = { 0 };
+				_snwprintf_s(pathBuf, RTL_NUMBER_OF(pathBuf), USER_MODE_EARLY_BREAK_SIGNAL_FILE_FMT, hval);
+				if (!DeleteFile(pathBuf)) {
+					app.GetETW().Log(L"OnRemoveExecutableFromEarlyBreakList: Failed to delete early break signal file path=%s\n", pathBuf);
+				} else {
+					app.GetETW().Log(L"OnRemoveExecutableFromEarlyBreakList: Deleted early break signal file path=%s\n", pathBuf);
+				}
+			}
+		}
+	}
+	
+	if (!anyRemoved) {
+		MessageBox(L"No items were removed.", L"Information", MB_ICONINFORMATION);
+		return;
+	}
+	
+	// Update UI to remove the star from affected processes
+	FilterProcessList(m_CurrentFilterString);
+	
+	MessageBox(L"EarlyBreak list updated successfully.", L"Success", MB_ICONINFORMATION);
 }
 
 void CUMControllerDlg::OnClearEtwLog() {

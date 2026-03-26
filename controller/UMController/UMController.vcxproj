@@ -356,6 +356,7 @@
     <ClCompile Include="ProcessResolver.cpp" />
     <ClCompile Include="ProcList.cpp" />
     <ClCompile Include="RegistryStore.cpp" />
+    <ClCompile Include="RemoveEarlyBreakDlg.cpp" />
     <ClCompile Include="RemoveHookDlg.cpp" />
     <ClCompile Include="UIHelpers.cpp" />
     <ClCompile Include="UMController.cpp" />

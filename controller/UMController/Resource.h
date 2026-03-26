@@ -24,6 +24,9 @@
 #define ID_MENU_REMOVE_HOOK_SINGLE 40005
 // Add from executable via Tools menu (distinct from context-menu add-by-process)
 #define ID_MENU_ADD_EXE        40004
+// EarlyBreak list management via Tools menu
+#define ID_TOOLS_ADD_EARLY_BREAK    40034
+#define ID_TOOLS_REMOVE_EARLY_BREAK 40035
 // Clear ETW log via Tools menu
 #define ID_MENU_CLEAR_ETW       40006
 #define ID_MENU_OPEN_ETW_LOG     40007

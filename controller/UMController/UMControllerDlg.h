@@ -46,6 +46,8 @@ protected:
 	afx_msg void OnInjectDll();
 	afx_msg void OnAddExecutableToHookList();
 	afx_msg void OnRemoveExecutablesFromHookList();
+	afx_msg void OnAddExecutableToEarlyBreakList();
+	afx_msg void OnRemoveExecutableFromEarlyBreakList();
 	afx_msg void OnClearEtwLog();
 	afx_msg void OnOpenEtwLog();
 	// Help menu handlers
