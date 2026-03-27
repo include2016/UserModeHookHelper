@@ -1,3 +1,4 @@
+
 #include "FltCommPort.h"
 #include "Trace.h"
 #include "UKShared.h"
@@ -5,7 +6,7 @@
 #include "PortCtx.h"
 #include "DriverCtx.h"
 #include "Inject.h"
-#include "ModuleWatch.h"
+// Removed: #include "ModuleWatch.h" - module watch moved to user-mode
 #include "PE.h"
 #include "KernelOffsets.h"
 #include "mini.h"
@@ -56,9 +57,9 @@ static NTSTATUS Handle_WriteProcessMemory(PCOMM_CONTEXT CallerCtx, PUMHH_COMMAND
 static NTSTATUS Handle_DuplicateHandleKernel(PCOMM_CONTEXT CallerCtx, PUMHH_COMMAND_MESSAGE msg, ULONG InputBufferSize, PVOID OutputBuffer, ULONG OutputBufferSize, PULONG ReturnOutputBufferLength);
 static NTSTATUS Handle_MapKernelToUser(PUMHH_COMMAND_MESSAGE msg, ULONG InputBufferSize, PVOID OutputBuffer, ULONG OutputBufferSize, PULONG ReturnOutputBufferLength);
 static NTSTATUS Handle_FreeMdl(PUMHH_COMMAND_MESSAGE msg, ULONG InputBufferSize, PVOID OutputBuffer, ULONG OutputBufferSize, PULONG ReturnOutputBufferLength);
-// Module watch handlers for delayed hook support
-static NTSTATUS Handle_RegisterModuleWatch(PUMHH_COMMAND_MESSAGE msg, ULONG InputBufferSize, PVOID OutputBuffer, ULONG OutputBufferSize, PULONG ReturnOutputBufferLength);
-static NTSTATUS Handle_UnregisterModuleWatch(PUMHH_COMMAND_MESSAGE msg, ULONG InputBufferSize, PVOID OutputBuffer, ULONG OutputBufferSize, PULONG ReturnOutputBufferLength);
+// Removed: Module watch handlers - module watch now implemented in user-mode
+// static NTSTATUS Handle_RegisterModuleWatch(PUMHH_COMMAND_MESSAGE msg, ULONG InputBufferSize, PVOID OutputBuffer, ULONG OutputBufferSize, PULONG ReturnOutputBufferLength);
+// static NTSTATUS Handle_UnregisterModuleWatch(PUMHH_COMMAND_MESSAGE msg, ULONG InputBufferSize, PVOID OutputBuffer, ULONG OutputBufferSize, PULONG ReturnOutputBufferLength);
 
 
 VOID KmhhFreeMappedRegion(KMHH_MAP_CONTEXT* ctx);
@@ -385,13 +386,13 @@ Comm_MessageNotify(
 		status = Handle_FreeMdl(msg, InputBufferSize, OutputBuffer, OutputBufferSize, ReturnOutputBufferLength);
 		break;
 
-	// Module watch commands for delayed hook support
-	case CMD_REGISTER_MODULE_WATCH:
-		status = Handle_RegisterModuleWatch(msg, InputBufferSize, OutputBuffer, OutputBufferSize, ReturnOutputBufferLength);
-		break;
-	case CMD_UNREGISTER_MODULE_WATCH:
-		status = Handle_UnregisterModuleWatch(msg, InputBufferSize, OutputBuffer, OutputBufferSize, ReturnOutputBufferLength);
-		break;
+	// Removed: Module watch commands - module watch now implemented in user-mode
+	// case CMD_REGISTER_MODULE_WATCH:
+	//     status = Handle_RegisterModuleWatch(msg, InputBufferSize, OutputBuffer, OutputBufferSize, ReturnOutputBufferLength);
+	//     break;
+	// case CMD_UNREGISTER_MODULE_WATCH:
+	//     status = Handle_UnregisterModuleWatch(msg, InputBufferSize, OutputBuffer, OutputBufferSize, ReturnOutputBufferLength);
+	//     break;
 
 	default:
 		break;
@@ -1835,54 +1836,55 @@ static NTSTATUS Handle_FreeMdl(PUMHH_COMMAND_MESSAGE msg, ULONG InputBufferSize,
 	return STATUS_SUCCESS;
 } 
 
-// Module watch handlers for delayed hook support
-static NTSTATUS Handle_RegisterModuleWatch(PUMHH_COMMAND_MESSAGE msg, ULONG InputBufferSize, PVOID OutputBuffer, ULONG OutputBufferSize, PULONG ReturnOutputBufferLength) {
-	ULONG minSize = (ULONG)(UMHH_MSG_HEADER_SIZE + sizeof(UMHH_MODULE_WATCH_REQUEST));
-	if (InputBufferSize < minSize) {
-		if (ReturnOutputBufferLength) *ReturnOutputBufferLength = sizeof(NTSTATUS);
-		return STATUS_BUFFER_TOO_SMALL;
-	}
-	
-	UMHH_MODULE_WATCH_REQUEST req = { 0 };
-	RtlCopyMemory(&req, msg->m_Data, sizeof(req));
-	
-	UNICODE_STRING moduleName;
-	RtlInitUnicodeString(&moduleName, req.ModuleName);
-	
-	NTSTATUS status = ModuleWatch_Register(req.ProcessId, &moduleName);
-	
-	if (OutputBuffer && OutputBufferSize >= sizeof(NTSTATUS))
-		RtlCopyMemory(OutputBuffer, &status, sizeof(NTSTATUS));
-	if (ReturnOutputBufferLength) *ReturnOutputBufferLength = sizeof(NTSTATUS);
-	return status;
-}
+// Removed: Module watch handlers - module watch now implemented in user-mode
+// static NTSTATUS Handle_RegisterModuleWatch(PUMHH_COMMAND_MESSAGE msg, ULONG InputBufferSize, PVOID OutputBuffer, ULONG OutputBufferSize, PULONG ReturnOutputBufferLength) {
+// 	ULONG minSize = (ULONG)(UMHH_MSG_HEADER_SIZE + sizeof(UMHH_MODULE_WATCH_REQUEST));
+// 	if (InputBufferSize < minSize) {
+// 		if (ReturnOutputBufferLength) *ReturnOutputBufferLength = sizeof(NTSTATUS);
+// 		return STATUS_BUFFER_TOO_SMALL;
+// 	}
+// 	
+// 	UMHH_MODULE_WATCH_REQUEST req = { 0 };
+// 	RtlCopyMemory(&req, msg->m_Data, sizeof(req));
+// 	
+// 	UNICODE_STRING moduleName;
+// 	RtlInitUnicodeString(&moduleName, req.ModuleName);
+// 	
+// 	NTSTATUS status = ModuleWatch_Register(req.ProcessId, &moduleName);
+// 	
+// 	if (OutputBuffer && OutputBufferSize >= sizeof(NTSTATUS))
+// 		RtlCopyMemory(OutputBuffer, &status, sizeof(NTSTATUS));
+// 	if (ReturnOutputBufferLength) *ReturnOutputBufferLength = sizeof(NTSTATUS);
+// 	return status;
+// }
+// 
+// static NTSTATUS Handle_UnregisterModuleWatch(PUMHH_COMMAND_MESSAGE msg, ULONG InputBufferSize, PVOID OutputBuffer, ULONG OutputBufferSize, PULONG ReturnOutputBufferLength) {
+// 	ULONG minSize = (ULONG)(UMHH_MSG_HEADER_SIZE + sizeof(UMHH_MODULE_WATCH_REQUEST));
+// 	if (InputBufferSize < minSize) {
+// 		if (ReturnOutputBufferLength) *ReturnOutputBufferLength = sizeof(NTSTATUS);
+// 		return STATUS_BUFFER_TOO_SMALL;
+// 	}
+// 	
+// 	UMHH_MODULE_WATCH_REQUEST req = { 0 };
+// 	RtlCopyMemory(&req, msg->m_Data, sizeof(req));
+// 	
+// 	UNICODE_STRING moduleName;
+// 	if (req.ModuleName[0] != L'\0') {
+// 		RtlInitUnicodeString(&moduleName, req.ModuleName);
+// 	} else {
+// 		moduleName.Buffer = NULL;
+// 		moduleName.Length = 0;
+// 		moduleName.MaximumLength = 0;
+// 	}
+// 	
+// 	NTSTATUS status = ModuleWatch_Unregister(req.ProcessId, &moduleName);
+// 	
+// 	if (OutputBuffer && OutputBufferSize >= sizeof(NTSTATUS))
+// 		RtlCopyMemory(OutputBuffer, &status, sizeof(NTSTATUS));
+// 	if (ReturnOutputBufferLength) *ReturnOutputBufferLength = sizeof(NTSTATUS);
+// 	return status;
+// }
 
-static NTSTATUS Handle_UnregisterModuleWatch(PUMHH_COMMAND_MESSAGE msg, ULONG InputBufferSize, PVOID OutputBuffer, ULONG OutputBufferSize, PULONG ReturnOutputBufferLength) {
-	ULONG minSize = (ULONG)(UMHH_MSG_HEADER_SIZE + sizeof(UMHH_MODULE_WATCH_REQUEST));
-	if (InputBufferSize < minSize) {
-		if (ReturnOutputBufferLength) *ReturnOutputBufferLength = sizeof(NTSTATUS);
-		return STATUS_BUFFER_TOO_SMALL;
-	}
-	
-	UMHH_MODULE_WATCH_REQUEST req = { 0 };
-	RtlCopyMemory(&req, msg->m_Data, sizeof(req));
-	
-	UNICODE_STRING moduleName;
-	if (req.ModuleName[0] != L'\0') {
-		RtlInitUnicodeString(&moduleName, req.ModuleName);
-	} else {
-		moduleName.Buffer = NULL;
-		moduleName.Length = 0;
-		moduleName.MaximumLength = 0;
-	}
-	
-	NTSTATUS status = ModuleWatch_Unregister(req.ProcessId, &moduleName);
-	
-	if (OutputBuffer && OutputBufferSize >= sizeof(NTSTATUS))
-		RtlCopyMemory(OutputBuffer, &status, sizeof(NTSTATUS));
-	if (ReturnOutputBufferLength) *ReturnOutputBufferLength = sizeof(NTSTATUS);
-	return status;
-}
 BOOLEAN KmhhMapKernelRegionToUser(KMHH_MAP_CONTEXT* ctx,
 	PVOID kernelVa,
 	SIZE_T length,

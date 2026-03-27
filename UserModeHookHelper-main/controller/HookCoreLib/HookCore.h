@@ -1,0 +1,38 @@
+//#pragma once (already)
+#pragma once
+#include <string>
+#include <vector>
+#include "../../Shared/HookServices.h" // shared interface (no windows.h here to avoid MFC ordering issue)
+#include "Disasm.h"
+// Forward minimal Win32 types to avoid forcing <windows.h> in MFC public headers.
+#ifndef _WINDEF_
+typedef unsigned long DWORD;
+#endif
+#ifndef _BASETSD_H_
+typedef unsigned long long ULONGLONG; // fallback if not already defined
+#endif
+
+// Placeholder core API for future hook logic implementation.
+namespace HookCore {
+	void SetHookServices(IHookServices* services);
+	IHookServices* GetHookServices();
+	struct ModuleInfo { std::wstring name; std::wstring path; ULONGLONG base = 0; ULONGLONG size = 0; };
+	// Enumerate modules for a process (snapshot-based). Returns false on failure.
+	bool EnumerateModules(DWORD pid, std::vector<ModuleInfo>& out);
+	// Validate an address lies within any loaded module; returns owning module name or empty.
+	std::wstring FindOwningModule(DWORD pid, ULONGLONG address, PVOID* moduleBase);
+	// Placeholder for future hook application (returns false until implemented).
+	// Apply a minimal validation hook. 'services' may be nullptr; if provided, core will emit
+	// diagnostic messages via services->LogCore().
+	bool ApplyHook(DWORD pid, ULONGLONG address, IHookServices* services,
+		DWORD64 hook_code_addr, int hook_id, DWORD *out_ori_asm_code_len,
+		PVOID* out_trampoline_pit, PVOID* out_ori_asm_code_addr);
+	bool RemoveHook(DWORD pid, ULONGLONG address, IHookServices* services, DWORD hook_id, DWORD ori_asm_code_len, PVOID trampoline_pit);
+	LPVOID AllocNearRemote(HANDLE hProcess, ULONGLONG target, SIZE_T size);
+	bool DisableHook(DWORD pid, ULONGLONG hook_address, IHookServices* services,
+		PVOID ori_asm_code_addr, DWORD ori_asm_code_len);
+	bool EnableHook(DWORD pid, ULONGLONG hook_address, IHookServices* services, PVOID trampoline_pit);
+
+	bool ConstructKernelTrampolineX64_Wrapper(IHookServices* services, PVOID hook_addr, PVOID target_base,
+		PVOID tramp_dll_base, DWORD stage_1_func_offset, DWORD stage_2_func_offset, DWORD64 hook_code_addr, DWORD* out_original_asm_len);
+}

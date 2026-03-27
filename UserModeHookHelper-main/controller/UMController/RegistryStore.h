@@ -1,0 +1,97 @@
+#pragma once
+#include <string>
+#include <vector>
+#include <tuple>
+#include "../../Shared/HookRow.h"
+
+namespace RegistryStore {
+    // Read all persisted hook NT paths into out vector. Returns true on success
+    // (including the case of an empty key). Uses HKLM and REG_PERSIST_SUBKEY.
+    bool ReadHookPaths(std::vector<std::wstring>& outPaths);
+
+    // Replace the persisted HookPaths value with the provided list. Returns
+    // true on success.
+    bool WriteHookPaths(const std::vector<std::wstring>& paths);
+
+    // Convenience helpers: add or remove a single NT path to the persisted list.
+    bool AddPath(const std::wstring& ntPath);
+    bool RemovePath(const std::wstring& ntPath);
+
+    // NT path resolution cache (for performance at UI startup)
+    // Stored in same registry subkey to keep consistency with kernel hook list persistence.
+    // Value name: NtPathCache (REG_MULTI_SZ). Each entry formatted as:
+    //    <16-hex-hash>=<NT_PATH>
+    // Where hash is Helper::GetNtPathHash over the NT path bytes.
+    // Composite startup cache (PID + creation FILETIME) -> NT path.
+    // REG_MULTI_SZ value name: NtProcCache. Each line formatted as:
+    //    PID:HIGH:LOW=NT_PATH
+    // Where HIGH/LOW are hex 8-digit FILETIME parts. Example:
+    //    12A4:01D9F2AB:7B3C1E40=\Device\HarddiskVolume3\Windows\System32\notepad.exe
+    bool ReadCompositeProcCache(std::vector<std::tuple<DWORD, DWORD, DWORD, std::wstring>>& outEntries);
+    bool WriteCompositeProcCache(const std::vector<std::tuple<DWORD, DWORD, DWORD, std::wstring>>& entries);
+    // Persisted per-process hook entries. Value name: ProcHookList (REG_MULTI_SZ)
+    // Each line formatted as:
+    //   PID:HIGH:LOW:HOOKID:ORI_LEN:TRAMP_PIT:ADDR=MODULE
+    // Where ADDR and TRAMP_PIT are unsigned 64-bit hex and HOOKID/ORI_LEN are 32-bit hex.
+    bool ReadProcHookList(std::vector<std::tuple<DWORD, DWORD, DWORD, int, DWORD, unsigned long long, unsigned long long, unsigned long long, std::wstring>>& outEntries);
+    // Variant that allows specifying a PID + creation FILETIME filter so callers
+    // can request only entries matching a particular process start time.
+    // If pid==0 and hi==0 and lo==0 the call behaves like the original (no filter).
+    bool ReadProcHookList(DWORD pid, DWORD filetimeHi, DWORD filetimeLo, std::vector<std::tuple<DWORD, DWORD, DWORD, int, DWORD, unsigned long long, unsigned long long, unsigned long long, std::wstring>>& outEntries);
+    bool WriteProcHookList(const std::vector<std::tuple<DWORD, DWORD, DWORD, int, DWORD, unsigned long long, unsigned long long, unsigned long long, std::wstring>>& entries);
+    // Optimized API: write/read using stable HookRow structures (future-proof for extra fields like ExpFunc)
+    bool WriteProcHookListRows(DWORD pid, DWORD filetimeHi, DWORD filetimeLo, const std::vector<::HookRow*>& rows);
+    bool ReadProcHookListRows(DWORD pid, DWORD filetimeHi, DWORD filetimeLo, std::vector<::HookRow>& outRows);
+    // Remove a single persisted ProcHookList entry matching PID, FILETIME hi/lo and hook id.
+    bool RemoveProcHookEntry(DWORD pid, DWORD filetimeHi, DWORD filetimeLo, int hookId);
+    // Remove all hook entries for a specific PID+FILETIME key
+    bool RemoveProcHookList(DWORD pid, DWORD filetimeHi, DWORD filetimeLo);
+    // Simple boolean setting helpers stored under REG_PERSIST_SUBKEY
+    bool ReadBoolSetting(const wchar_t* name, bool defaultValue, bool& outValue);
+    bool WriteBoolSetting(const wchar_t* name, bool value);
+    // Convenience accessors
+    bool ReadGlobalHookMode(bool& outEnabled);
+    bool WriteGlobalHookMode(bool enabled);
+    // Persist per-process 'EarlyBreak' marks as NT-path strings (REG_MULTI_SZ).
+    // Each entry is the process image NT path (e.g. "\Device\HarddiskVolume3\Windows\System32\notepad.exe").
+    // This is drive-agnostic and stable across PID reuse for the same image.
+    bool ReadEarlyBreakMarks(std::vector<std::wstring>& outNtPaths);
+    bool AddEarlyBreakMark(const std::wstring& ntPath);
+    bool RemoveEarlyBreakMark(const std::wstring& ntPath);
+
+    // Whitelist persistence: separate keys for NT paths and hashes
+    bool ReadWhitelistPaths(std::vector<std::wstring>& outNtPaths);
+    bool AddWhitelistPath(const std::wstring& ntPath);
+    bool RemoveWhitelistPath(const std::wstring& ntPath);
+    bool ReadWhitelistHashes(std::vector<unsigned long long>& outHashes);
+    bool AddWhitelistHash(unsigned long long hash);
+    bool RemoveWhitelistHash(unsigned long long hash);
+    // Persist forced injection marks keyed by PID + startTime. Value name: ForcedList (REG_MULTI_SZ)
+    // Each entry formatted as: PID:HIGH:LOW
+    bool ReadForcedMarks(std::vector<std::tuple<DWORD, DWORD, DWORD>>& outEntries);
+    bool WriteForcedMarks(const std::vector<std::tuple<DWORD, DWORD, DWORD>>& entries);
+    bool AddForcedMark(DWORD pid, DWORD hi, DWORD lo);
+    bool RemoveForcedMark(DWORD pid, DWORD hi, DWORD lo);
+
+    // Persist manual PPL operations keyed by PID + creation FILETIME.
+    // Value name: PplElevatedList (REG_MULTI_SZ), entries formatted as PID:HIGH:LOW
+    bool ReadPplElevatedMarks(std::vector<std::tuple<DWORD, DWORD, DWORD>>& outEntries);
+    bool WritePplElevatedMarks(const std::vector<std::tuple<DWORD, DWORD, DWORD>>& entries);
+    bool AddPplElevatedMark(DWORD pid, DWORD hi, DWORD lo);
+    bool RemovePplElevatedMark(DWORD pid, DWORD hi, DWORD lo);
+
+    // Value name: PplUnprotectedList (REG_MULTI_SZ), entries formatted as PID:HIGH:LOW
+    bool ReadPplUnprotectedMarks(std::vector<std::tuple<DWORD, DWORD, DWORD>>& outEntries);
+    bool WritePplUnprotectedMarks(const std::vector<std::tuple<DWORD, DWORD, DWORD>>& entries);
+    bool AddPplUnprotectedMark(DWORD pid, DWORD hi, DWORD lo);
+    bool RemovePplUnprotectedMark(DWORD pid, DWORD hi, DWORD lo);
+
+    // Persist original PPL Protection value keyed by PID + FILETIME.
+    // Value name: PplOriginalProtList (REG_MULTI_SZ), entries formatted as PID:HIGH:LOW=HEX32
+    bool ReadPplOriginalProt(std::vector<std::tuple<DWORD, DWORD, DWORD, DWORD>>& outEntries);
+    bool WritePplOriginalProt(const std::vector<std::tuple<DWORD, DWORD, DWORD, DWORD>>& entries);
+    bool AddPplOriginalProt(DWORD pid, DWORD hi, DWORD lo, DWORD prot);
+    bool GetPplOriginalProt(DWORD pid, DWORD hi, DWORD lo, DWORD& outProt);
+    bool RemovePplOriginalProt(DWORD pid, DWORD hi, DWORD lo);
+
+}

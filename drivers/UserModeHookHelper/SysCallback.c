@@ -1,10 +1,12 @@
+
 #include "SysCallback.h"
 #include "Trace.h"
 #include "FltCommPort.h"
 #include "Inject.h"
 #include "StrLib.h"
 #include "DriverCtx.h"
-#include "ModuleWatch.h"
+// Removed: #include "ModuleWatch.h" - module watch now implemented in user-mode
+
 NTSTATUS SetSysNotifiers() {
 	NTSTATUS status;
 	status = PsSetCreateProcessNotifyRoutine(ProcessCrNotify, FALSE);
@@ -95,19 +97,12 @@ LoadImageNotify(
 	// Only act when we have a valid image name.
 	if (!FullImageName || FullImageName->Length == 0) return;
 
-	// Check for watched modules and notify user-mode
-	PEPROCESS process = NULL;
-	NTSTATUS st = PsLookupProcessByProcessId(ProcessId, &process);
-	if (NT_SUCCESS(st) && process) {
-		ModuleWatch_CheckAndNotify(FullImageName, process, ImageInfo);
-		ObDereferenceObject(process);
-	}
+	// Removed: ModuleWatch_CheckAndNotify - module watch now implemented in user-mode
 
 	// We no longer compute the full-image hash here because matching is
 	// performed at process-create time in ProcessCrNotify (SeLocateProcessImageName).
 	// Here we only look for ntdll.dll loads and perform injection for any
 	// processes previously queued via PendingInject_Add. We pass the current
-	// process object directly.
+	// process object.
 	Inject_OnImageLoad(FullImageName, PsGetCurrentProcess(), ImageInfo);
 }
- 
