@@ -347,6 +347,7 @@ BEGIN_MESSAGE_MAP(CUMControllerDlg, CDialogEx)
 	ON_COMMAND(ID_MENU_UNMARK_EARLY_BREAK, &CUMControllerDlg::OnUnmarkEarlyBreak)
 	ON_COMMAND(ID_MENU_FORCE_INJECT, &CUMControllerDlg::OnForceInject)
 	ON_MESSAGE(WM_APP_FATAL, &CUMControllerDlg::OnFatalMessage)
+	ON_MESSAGE(WM_APP_MODULE_LOADED, &CUMControllerDlg::OnModuleLoaded)
 	// Hook dialog destruction message now supplied by DLL (numeric constant)
 	ON_MESSAGE(WM_APP + 0x701, &CUMControllerDlg::OnHookDlgDestroyed)
 	ON_MESSAGE(WM_APP_POST_ENUM_CLEANUP, &CUMControllerDlg::OnPostEnumCleanup)
@@ -367,7 +368,10 @@ END_MESSAGE_MAP()
 // Adapter implementing IHookServices for current process (bridges to ETW tracer)
 class HookServicesAdapter : public HookServicesBase {
 public:
-
+	HookServicesAdapter() : m_pDlg(nullptr) {}
+	
+	void SetDialog(CUMControllerDlg* pDlg) { m_pDlg = pDlg; }
+	
 	BOOLEAN ReadPrimitive(_In_ LPVOID target_addr, _Out_ LPVOID buffer, _In_ size_t size) override {
 		return Helper::ReadPrimitive(target_addr, buffer, size);
 	}
@@ -498,6 +502,39 @@ public:
 		 return Helper::WriteProcessMemoryWrap(hProcess, lpBaseAddress, lpBuffer, nSize, lpNumberOfBytesWritten) ? TRUE : FALSE;
 
 	 }
+	 bool RegisterModuleWatch(DWORD pid, const wchar_t* moduleName) override {
+		 Filter* f = Helper::GetFilterInstance();
+		 if (!f) return false;
+		 return f->FLTCOMM_RegisterModuleWatch(pid, moduleName);
+	 }
+	 void RegisterModuleLoadCallback(ModuleLoadCallback callback, void* context) override {
+		 Filter* f = Helper::GetFilterInstance();
+		 if (!f) return;
+		 f->RegisterModuleLoadCallback(callback, context);
+	 }
+	 void AddPendingHook(const PendingHook& hook) override {
+		 if (!m_pDlg) return;
+		 CUMControllerDlg::PendingHookKey key{ hook.pid, hook.module };
+		 m_pDlg->m_PendingHooks[key].push_back(hook);
+		 LOG_CTRL_ETW(L"Added pending hook for PID %u, module %s, offset %s\n", hook.pid, hook.module.c_str(), hook.offset.c_str());
+	 }
+	 std::vector<PendingHook> GetPendingHooks(DWORD pid, const wchar_t* moduleName) override {
+		 if (!m_pDlg) return {};
+		 CUMControllerDlg::PendingHookKey key{ pid, moduleName };
+		 auto it = m_pDlg->m_PendingHooks.find(key);
+		 if (it != m_pDlg->m_PendingHooks.end()) {
+			 return it->second;
+		 }
+		 return {};
+	 }
+	 void RemovePendingHooks(DWORD pid, const wchar_t* moduleName) override {
+		 if (!m_pDlg) return;
+		 CUMControllerDlg::PendingHookKey key{ pid, moduleName };
+		 m_pDlg->m_PendingHooks.erase(key);
+		 LOG_CTRL_ETW(L"Removed pending hooks for PID %u, module %s\n", pid, moduleName);
+	 }
+private:
+	CUMControllerDlg* m_pDlg; // Direct dialog pointer (set via SetDialog)
 };
 static HookServicesAdapter g_HookServices; // singleton adapter instance
 
@@ -644,6 +681,7 @@ BOOL CUMControllerDlg::OnInitDialog()
 {
 	CDialogEx::OnInitDialog();
 	app.SetHwnd(this->GetSafeHwnd());
+	g_HookServices.SetDialog(this); // Set dialog pointer for service adapter
 
 
 
@@ -908,6 +946,29 @@ BOOL CUMControllerDlg::OnInitDialog()
 		}
 		else {
 			Helper::Fatal(L"you can not pass hwnd as null to ApcQueuedCallback\n");
+		}
+	}, this->GetSafeHwnd());
+
+	// Register module load notification callback for delayed hook support
+	m_Filter.RegisterModuleLoadCallback([](DWORD pid, const wchar_t* moduleName, const wchar_t* fullPath, ULONGLONG base, void* ctx) {
+		HWND hwnd = NULL;
+		if (ctx) hwnd = (HWND)ctx;
+		if (hwnd) {
+			// Post a message to apply delayed hooks for the loaded module
+			// Allocate a structure to pass module info
+			struct ModuleLoadInfo {
+				DWORD pid;
+				WCHAR moduleName[260];
+				WCHAR fullPath[520];
+				ULONGLONG base;
+			};
+			ModuleLoadInfo* info = new ModuleLoadInfo();
+			info->pid = pid;
+			wcscpy_s(info->moduleName, moduleName);
+			wcscpy_s(info->fullPath, fullPath);
+			info->base = base;
+			
+			::PostMessage(hwnd, WM_APP_MODULE_LOADED, (WPARAM)info, 0);
 		}
 	}, this->GetSafeHwnd());
 
@@ -1255,7 +1316,7 @@ void CUMControllerDlg::FilterProcessList(const std::wstring& filter) {
 			int nIndex = m_ProcListCtrl.InsertItem(i, all[idx].name.c_str());
 			m_ProcListCtrl.SetItemText(nIndex, 1, std::to_wstring(all[idx].pid).c_str());
 			// Early Break marker column
-			m_ProcListCtrl.SetItemText(nIndex, 2, (flags & PF_EARLY_BREAK_MARKED) ? L"★" : L"");
+			m_ProcListCtrl.SetItemText(nIndex, 2, (flags & PF_EARLY_BREAK_MARKED) ? L"??" : L"");
 			m_ProcListCtrl.SetItemText(nIndex, 3, FormatHookColumn(packed).c_str());
 			m_ProcListCtrl.SetItemText(nIndex, 4, all[idx].path.c_str());
 			m_ProcListCtrl.SetItemText(nIndex, 5, all[idx].cmdline.c_str());
@@ -1397,8 +1458,8 @@ void CUMControllerDlg::LoadProcessList() {
 			if (all[idx].forced) flags |= PF_FORCED;
 		}
 		PROC_ITEMDATA packed = MAKE_ITEMDATA(all[idx].pid, flags);
-		// m_ProcListCtrl.SetItemText(nIndex, 2, (FLAGS_FROM_ITEMDATA(packed) & PF_EARLY_BREAK_MARKED) ? L"★" : L"");
-		m_ProcListCtrl.SetItemText(nIndex, 2, all[idx].early_break ? L"★" : L"");
+		// m_ProcListCtrl.SetItemText(nIndex, 2, (FLAGS_FROM_ITEMDATA(packed) & PF_EARLY_BREAK_MARKED) ? L"??" : L"");
+		m_ProcListCtrl.SetItemText(nIndex, 2, all[idx].early_break ? L"??" : L"");
 		m_ProcListCtrl.SetItemText(nIndex, 3, FormatHookColumn(packed).c_str());
 		m_ProcListCtrl.SetItemText(nIndex, 4, all[idx].path.c_str());
 		m_ProcListCtrl.SetItemText(nIndex, 5, all[idx].cmdline.c_str());
@@ -1570,7 +1631,7 @@ LRESULT CUMControllerDlg::OnUpdateProcess(WPARAM wParam, LPARAM lParam) {
 				for (wchar_t &c : low) c = towlower(c);
 				if (m_EarlyBreakSet.find(low) != m_EarlyBreakSet.end()) earlyMarkedNow = true;
 			}
-			m_ProcListCtrl.SetItemText(newItem, 2, earlyMarkedNow ? L"★" : L"");
+			m_ProcListCtrl.SetItemText(newItem, 2, earlyMarkedNow ? L"??" : L"");
 			m_ProcListCtrl.SetItemText(newItem, 3, FormatHookColumn(MAKE_ITEMDATA(pid, (e.bInHookList ? PF_IN_HOOK_LIST : 0))).c_str());
 			m_ProcListCtrl.SetItemText(newItem, 4, e.path.c_str());
 			m_ProcListCtrl.SetItemText(newItem, 5, e.cmdline.c_str());
@@ -1616,7 +1677,7 @@ LRESULT CUMControllerDlg::OnUpdateProcess(WPARAM wParam, LPARAM lParam) {
 			DWORD mergedFlags = FLAGS_FROM_ITEMDATA(mergedPacked) | PF_EARLY_BREAK_MARKED;
 			mergedPacked = MAKE_ITEMDATA(pid, mergedFlags);
 		}
-		m_ProcListCtrl.SetItemText(item, 2, earlyMarkedNow ? L"★" : L"");
+		m_ProcListCtrl.SetItemText(item, 2, earlyMarkedNow ? L"??" : L"");
 		m_ProcListCtrl.SetItemText(item, 3, FormatHookColumn(mergedPacked).c_str());
 		m_ProcListCtrl.SetItemText(item, 4, path.c_str());
 		m_ProcListCtrl.SetItemText(item, 5, cmdline.c_str());
@@ -1841,7 +1902,7 @@ void CUMControllerDlg::OnNMRClickListProc(NMHDR *pNMHDR, LRESULT *pResult)
 			DWORD newFlags = FLAGS_FROM_ITEMDATA(existing) | PF_EARLY_BREAK_MARKED;
 			PROC_ITEMDATA newPacked = MAKE_ITEMDATA(pid, newFlags);
 			m_ProcListCtrl.SetItemData(nItem, (DWORD_PTR)newPacked);
-			m_ProcListCtrl.SetItemText(nItem, 2, L"★");
+			m_ProcListCtrl.SetItemText(nItem, 2, L"??");
 		}
 	}
 
@@ -2037,7 +2098,7 @@ void CUMControllerDlg::OnMarkEarlyBreak()
 	DWORD newFlags = runtimeFlags | PF_EARLY_BREAK_MARKED;
 	PROC_ITEMDATA newPacked = MAKE_ITEMDATA(pid, newFlags);
 	m_ProcListCtrl.SetItemData(nItem, (DWORD_PTR)newPacked);
-	m_ProcListCtrl.SetItemText(nItem, 2, L"★");
+	m_ProcListCtrl.SetItemText(nItem, 2, L"??");
 	m_ProcListCtrl.SetItemText(nItem, 3, FormatHookColumn(newPacked).c_str());
 	FilterProcessList(m_CurrentFilterString);
 
@@ -2632,4 +2693,115 @@ void CUMControllerDlg::OnOpenEtwLog() {
 		MessageBox(msg, L"ETW Trace Log", MB_ICONERROR);
 	}
 }
+
+LRESULT CUMControllerDlg::OnModuleLoaded(WPARAM wParam, LPARAM lParam) {
+	UNREFERENCED_PARAMETER(lParam);
+	
+	// wParam contains pointer to ModuleLoadInfo structure
+	ModuleLoadInfo* info = (ModuleLoadInfo*)wParam;
+	if (!info) return 0;
+	
+	// Auto-delete the allocated structure when done
+	std::unique_ptr<ModuleLoadInfo> autoDelete(info);
+	
+	LOG_CTRL_ETW(L"Module loaded notification: PID %u, Module %s, Base 0x%p\n", 
+		info->pid, info->moduleName, (PVOID)info->base);
+	
+	// Extract just the filename from the full module name
+	std::wstring moduleName = info->moduleName;
+	size_t pos = moduleName.find_last_of(L"\\/");
+	if (pos != std::wstring::npos) {
+		moduleName = moduleName.substr(pos + 1);
+	}
+	
+	// Check if there are any pending hooks for this module
+	std::vector<PendingHook> pending = g_HookServices.GetPendingHooks(info->pid, moduleName.c_str());
+	if (!pending.empty()) {
+		LOG_CTRL_ETW(L"Found %zu pending hooks for PID %u, module %s. Applying now...\n", 
+			pending.size(), info->pid, moduleName.c_str());
+		
+		// Apply each pending hook
+		for (const auto& hook : pending) {
+			// Calculate the actual address: module base + offset
+			ULONGLONG offset = 0;
+			try {
+				offset = std::stoull(hook.offset, nullptr, 0);
+			} catch (...) {
+				LOG_CTRL_ETW(L"Failed to parse offset %s for pending hook\n", hook.offset.c_str());
+				continue;
+			}
+			
+			ULONGLONG targetAddress = info->base + offset;
+			
+			// Get hook code DLL base and offset
+			ULONGLONG hookCodeBase = 0;
+			if (!g_HookServices.GetModuleBase(info->pid, hook.dllPath.c_str(), &hookCodeBase)) {
+				LOG_CTRL_ETW(L"Failed to get hook code DLL base for %s\n", hook.dllPath.c_str());
+				continue;
+			}
+			
+			// Resolve hook code export offset
+			DWORD hookCodeOffset = 0;
+			// Convert wide string export name to narrow string for CheckExportFromFile
+			CT2A exportNameA(hook.exportName.c_str());
+			if (!g_HookServices.CheckExportFromFile(hook.dllPath.c_str(), exportNameA, &hookCodeOffset)) {
+				LOG_CTRL_ETW(L"Failed to resolve export %s from %s\n", hook.exportName.c_str(), hook.dllPath.c_str());
+				continue;
+			}
+			
+			ULONGLONG hookCodeAddress = hookCodeBase + hookCodeOffset;
+			
+			// Apply the hook using HookCore
+			// Find an available hook ID
+			int assignedHookId = -1;
+			for (int i = 0; i < TRAMPOLINE_EXP_NUM_MAX; i++) {
+				if (!_bittest((LONG*)&hook.hookRow.id, i)) {
+					assignedHookId = i;
+					break;
+				}
+			}
+			
+			if (assignedHookId == -1) {
+				LOG_CTRL_ETW(L"No available hook IDs for delayed hook\n");
+				continue;
+			}
+			
+			// Apply the hook
+			ULONGLONG trampolineAddr = 0;
+			ULONGLONG origCodeAddr = 0;
+			DWORD origCodeLen = 0;
+			
+			bool success = HookCore::ApplyHook(
+				info->pid,
+				targetAddress,
+				&g_HookServices,
+				hookCodeAddress,
+				assignedHookId,
+				&origCodeLen,
+				(PVOID*)&trampolineAddr,
+				(PVOID*)&origCodeAddr
+			);
+			
+			if (success) {
+				LOG_CTRL_ETW(L"Successfully applied delayed hook: PID %u, target=0x%llX, hookId=%d\n", 
+					info->pid, targetAddress, assignedHookId);
+					
+				// Update the hook row with the assigned ID
+				// Note: HookRow persistence would happen here if needed
+			} else {
+				LOG_CTRL_ETW(L"Failed to apply delayed hook: PID %u, target=0x%llX\n", 
+					info->pid, targetAddress);
+			}
+		}
+		
+		// Remove applied hooks from pending list
+		g_HookServices.RemovePendingHooks(info->pid, moduleName.c_str());
+		
+		// Update UI to reflect the newly loaded module
+		::PostMessage(m_hWnd, WM_APP_UPDATE_PROCESS, (WPARAM)info->pid, (LPARAM)UPDATE_SOURCE_NOTIFY);
+	}
+	
+	return 0;
+}
+
 

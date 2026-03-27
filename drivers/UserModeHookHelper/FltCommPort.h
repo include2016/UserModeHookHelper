@@ -54,4 +54,7 @@ Comm_MessageNotify(
 NTSTATUS Comm_BroadcastProcessNotify(DWORD ProcessId, BOOLEAN Create, PULONG outNotifiedCount, PUNICODE_STRING imageName);
 // Broadcast an APC-queued notification to user-mode clients. Safe to call at APC level.
 NTSTATUS Comm_BroadcastApcQueued(DWORD ProcessId, PULONG outNotifiedCount);
+// Broadcast a module load notification to all connected clients for delayed hook support.
+// Safe to call at APC level.
+NTSTATUS Comm_BroadcastModuleLoad(DWORD ProcessId, PUNICODE_STRING ModuleName, ULONGLONG ModuleBase, PULONG outNotifiedCount);
 #endif

@@ -7,6 +7,7 @@
 #include "PortCtx.h"
 #include "DriverCtx.h"
 #include "Inject.h"
+#include "ModuleWatch.h"
 #include <ntifs.h>
 #include "StrLib.h"
 NTSTATUS
@@ -23,6 +24,9 @@ MiniUnload(
 
 	// free hook list entries (encapsulated in HookList module)
 	HookList_Uninit();
+	
+	// Uninitialize module watch subsystem
+	ModuleWatch_Uninit();
 
 	// Signal unloading to gate work items and broadcasts
 	DriverCtx_SetUnloading(TRUE);

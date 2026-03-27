@@ -8,4 +8,5 @@
 // Driver context pool tag
 #define tag_driver_ctx 'CtxD'
 #define tag_stream_handle_ctx 'hcsU'
+#define tag_module_watch 'tcaW'
 #endif 

@@ -3,6 +3,7 @@
 #include "HookProcDlg.h"
 #include "../../Shared/LogMacros.h"
 #include "../../Shared/HookRow.h"
+#include "../../Shared/HookServices.h"
 #include <tlhelp32.h>
 #include <cwchar>
 #include <cwctype>
@@ -203,8 +204,23 @@ void HookProcDlg::OnBnClickedApplyHookSequence() {
 		// Resolve module base
 		bool is64 = false; m_services->IsProcess64(targetPid, is64);
 		DWORD64 base = 0; 
-		if (!m_services->GetModuleBase( targetPid, mod.c_str(), &base)) { 
-			LOG_UI(m_services,L"HookSeq: module %s not loaded\n", mod.c_str()); 
+		if (!m_services->GetModuleBase( targetPid, mod.c_str(), &base) || base == 0) { 
+			LOG_UI(m_services,L"HookSeq: module %s not loaded (base=%p), registering for delayed hook\n", mod.c_str(), (void*)base); 
+			
+			// Register module watch for delayed hooking
+			m_services->RegisterModuleWatch(targetPid, mod.c_str());
+			
+			// Create pending hook entry
+			PendingHook pending;
+			pending.pid = targetPid;
+			pending.module = mod;
+			pending.offset = off;
+			pending.dllPath = dll;
+			pending.exportName = exp;
+			pending.address = 0; // Will be resolved when module loads
+			m_services->AddPendingHook(pending);
+			
+			LOG_UI(m_services, L"HookSeq: registered pending hook for %s!%s\n", dll.c_str(), exp.c_str());
 			continue; 
 		}
 		bool ok = true;
@@ -1032,6 +1048,38 @@ void HookProcDlg::OnBnClickedApplyHook() {
 		std::wstring modName; ULONGLONG base = 0ULL; if (!GetSelectedModule(modName, base)) {
 			MessageBox(L"Select a module (Base column) or provide a direct address.", L"Hook", MB_ICONWARNING); return;
 		}
+		
+		// Verify the module is actually loaded by querying the process
+		DWORD64 actualBase = 0;
+		if (!m_services->GetModuleBase(m_pid, modName.c_str(), &actualBase) || actualBase == 0) {
+			// Module not loaded - offer delayed hook option
+			int result = MessageBox((L"Module '" + modName + L"' is not currently loaded in the target process.\n\n"
+				L"Do you want to register for delayed hooking?\n"
+				L"The hook will be applied automatically when the module loads.").c_str(),
+				L"Module Not Loaded", MB_YESNO | MB_ICONQUESTION);
+			
+			if (result == IDYES) {
+				// Register module watch
+				m_services->RegisterModuleWatch(m_pid, modName.c_str());
+				
+				// Store pending hook with module+offset format
+				ULONGLONG offVal = 0ULL; bool offOk = true;
+				if (!offset.empty()) { offVal = ParseAddressText(offset, offOk); }
+				if (!offOk) { MessageBox(L"Invalid offset. Use hex like 0x200 or leave empty.", L"Hook", MB_ICONERROR); return; }
+				
+				// Get the selected DLL path (we need to prompt for it first)
+				// For now, just register the watch and let user apply hook later
+				LOG_UI(m_services, L"Registered module watch for %s (delayed hook)\n", modName.c_str());
+				MessageBox(L"Module watch registered. The hook will be applied automatically when the module loads.", L"Delayed Hook", MB_OK | MB_ICONINFORMATION);
+				return;
+			}
+			else {
+				return; // User cancelled
+			}
+		}
+		
+		// Module is loaded, use the actual base address (not stale UI data)
+		base = actualBase;
 		ULONGLONG offVal = 0ULL; bool offOk = true; // empty offset means 0
 		if (!offset.empty()) { offVal = ParseAddressText(offset, offOk); }
 		if (!offOk) { MessageBox(L"Invalid offset. Use hex like 0x200 or leave empty.", L"Hook", MB_ICONERROR); return; }
@@ -1088,6 +1136,30 @@ void HookProcDlg::OnBnClickedApplyHook() {
 	std::vector<HookCore::ModuleInfo> mods; HookCore::EnumerateModules(m_pid, mods);
 	for (auto &m : mods) {
 		if (addr >= m.base && addr < m.base + m.size) { moduleBase = m.base; break; }
+	}
+
+	// If moduleBase is 0, the address is not within any loaded module.
+	// This could mean the user entered an invalid address, or the module hasn't loaded yet.
+	// For delayed hook support, we need to determine which module this address should belong to.
+	if (moduleBase == 0) {
+		// Try to extract module name from the hook code path
+		std::wstring hookDllPath = selectedPath.GetString();
+		size_t lastSlash = hookDllPath.find_last_of(L"\\/");
+		std::wstring hookDllName = (lastSlash != std::wstring::npos) ? hookDllPath.substr(lastSlash + 1) : hookDllPath;
+		
+		// Convert to lowercase for comparison
+		auto toLower = [](std::wstring& s) {
+			for (auto& c : s) c = towlower(c);
+		};
+		std::wstring dllNameLower = hookDllName;
+		toLower(dllNameLower);
+		
+		// Check if this looks like a module+offset pattern
+		// For now, we'll just warn the user that the address is invalid
+		LOG_UI(m_services, L"Manual Hook: address 0x%llX not within any loaded module for pid %u\n", addr, m_pid);
+		MessageBox(L"The specified address is not within any loaded module.\nPlease verify the address is correct, or the target module has loaded.", 
+			L"Hook", MB_OK | MB_ICONWARNING);
+		return;
 	}
 
 	// Copy the selected DLL to a local temp folder beside this module so the

@@ -10,6 +10,17 @@
 
 #include "HookRow.h"
 
+// Structure to represent a pending hook for a module that's not yet loaded
+struct PendingHook {
+    DWORD pid;
+    std::wstring module;      // Module name (e.g., "ntdll.dll")
+    std::wstring offset;      // Offset as string (e.g., "0x1234")
+    std::wstring dllPath;     // Full path to hook code DLL
+    std::wstring exportName;  // Export function name
+    ULONGLONG address;        // Resolved address (filled when module loads)
+    HookRow hookRow;          // HookRow data for applying the hook
+};
+
 // Unified IHookServices interface shared by UMController, HookUI, and HookCoreLib.
 // Provides two logging channels: general (Log) and hook-core diagnostics (LogCore).
 struct IHookServices {
@@ -61,7 +72,17 @@ struct IHookServices {
     // Load persisted ProcHookList entries for a specific PID + creation time
     virtual bool LoadProcHookList(DWORD pid, DWORD filetimeHi, DWORD filetimeLo, std::vector<HookRow>& outEntries) = 0;
 	virtual bool ForceInject(DWORD pid) = 0;
-    virtual ~IHookServices() {}
+    // Register a module watch for delayed hooking. When the specified module loads
+    // in the target process, the registered callback will be invoked.
+    virtual bool RegisterModuleWatch(DWORD pid, const wchar_t* moduleName) = 0;
+    // Register a callback to be invoked when watched modules load
+    typedef void (*ModuleLoadCallback)(DWORD pid, const wchar_t* moduleName, const wchar_t* fullPath, ULONGLONG base, void* context);
+    virtual void RegisterModuleLoadCallback(ModuleLoadCallback callback, void* context) = 0;    // Add a pending hook to be applied when the module loads
+    virtual void AddPendingHook(const PendingHook& hook) = 0;
+    // Get all pending hooks for a specific PID and module
+    virtual std::vector<PendingHook> GetPendingHooks(DWORD pid, const wchar_t* moduleName) = 0;
+    // Remove pending hooks after they've been applied
+    virtual void RemovePendingHooks(DWORD pid, const wchar_t* moduleName) = 0;    virtual ~IHookServices() {}
 };
 
  

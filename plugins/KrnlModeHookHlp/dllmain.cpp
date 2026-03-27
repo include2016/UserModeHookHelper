@@ -686,6 +686,9 @@
 			KRNL::GetDriverBase(a, (PVOID*)&moduleBase);
 		}
 		if (!moduleBase) {
+			KMHHLog(L"failed to get target module base\n")*)&moduleBase);
+		}
+		if (!moduleBase) {
 			KMHHLog(L"failed to get target module base\n");
 			return false;
 		}
@@ -897,19 +900,49 @@
 		bool overallSuccess = true;
 		for (const auto& entry : entries) {
 			HookSequenceResult res;
-			res.entry = entry;
-			bool addrOk = false;
-			DWORD64 base = 0;
 
 			{
 				char a[MAX_PATH] = { 0 };
 				Helper::ConvertWcharToChar(entry.module.c_str(), a, MAX_PATH);
 				KRNL::GetDriverBase(a, (PVOID*)&base);
 			}
-			if (!base) {
-				MessageBoxW(hwnd, L"Failed to call GetDriverBase to get to be hooked module base", L"Hook Sequence", MB_ICONERROR);
-				return;
+			
+			// Check if the module is loaded
+			bool moduleLoaded = (base != 0);
+			if (!moduleLoaded) {
+				// Module not loaded - register for delayed hooking
+				KMHHLog(L"Module %s not loaded. Registering for delayed hook...", entry.module.c_str()
+				Helper::ConvertWcharToChar(entry.module.c_str(), a, MAX_PATH);
+				KRNL::GetDriverBase(a, (PVOID*)&base);
 			}
+			
+			// Check if the module is loaded
+			bool moduleLoaded = (base != 0);
+			if (!moduleLoaded) {
+				// Module not loaded - register for delayed hooking
+				KMHHLog(L"Module %s not loaded. Registering for delayed hook...", entry.module.c_str());
+				
+				// Create a pending hook entry
+				PendingHook pending;
+				pending.pid = targetPid;
+				pending.module = entry.module;
+				pending.offset = entry.offset;
+				pending.dllPath = entry.dllPath;
+				pending.exportName = entry.exportName;
+				pending.address = 0; // Will be resolved when module loads
+				
+				// Add to pending hooks
+				g_services->AddPendingHook(pending);
+				
+				// Register module watch with driver
+				g_services->RegisterModuleWatch(targetPid, entry.module.c_str());
+				
+				res.success = false;
+				res.status = L"Pending (module not loaded)";
+				results.push_back(res);
+				continue;
+			}
+			
 			ULONGLONG off = ParseAddressText(entry.offset, addrOk);
 			if (addrOk) res.address = base + off;
 			else {
@@ -940,7 +973,11 @@
 			results.push_back(res);
 		}
 
-		if (overallSuccess) {
+		// Count pending hooks (modules not yet loaded)
+		size_t pendingCount = std::count_if(results.begin(), results.end(), 
+			[](const HookSequenceResult& r) { return r.status == L"Pending (module not loaded)"; });
+		
+		if (overallSuccess || pendingCount > 0) {
 			PersistHookRows(ctx);
 			std::vector<HookSequenceResult> display;
 			display.reserve(ctx.persisted.size());
@@ -955,8 +992,13 @@
 				display.push_back(std::move(res));
 			}
 			UpdateHookList(g_hHookList, display);
-			wchar_t msg[128];
-			swprintf(msg, _countof(msg), L"Applied %zu hooks.", appliedThisRun.size());
+			wchar_t msg[256];
+			if (pendingCount > 0) {
+				swprintf(msg, _countof(msg), L"Applied %zu hooks. %zu hooks pending (waiting for modules to load).", 
+					appliedThisRun.size(), pendingCount);
+			} else {
+				swprintf(msg, _countof(msg), L"Applied %zu hooks.", appliedThisRun.size());
+			}
 			MessageBoxW(hwnd, msg, L"Hook Sequence", MB_OK | MB_ICONINFORMATION);
 		}
 	}

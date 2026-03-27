@@ -6,6 +6,7 @@
 #include "PortCtx.h"
 #include "DriverCtx.h"
 #include "Inject.h"
+#include "ModuleWatch.h"
 #include "BootStartControl.h"
 #include "PE.h"
 #include "../../Shared/SharedMacroDef.h"
@@ -134,6 +135,7 @@ DriverEntry(
 	HookList_Init();
 	PortCtx_Init();
 	Inject_Init();
+	ModuleWatch_Init();
 
 	// Load persisted settings from registry (global hook mode, user dir, ...)
 	LoadPersistedDriverSettings();

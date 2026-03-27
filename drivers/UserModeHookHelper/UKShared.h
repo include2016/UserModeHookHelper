@@ -78,6 +78,16 @@
 #define CMD_FREE_MDL 28
 // (CMD_RESOLVE_NT_PATH removed - NT path resolution is performed in user-mode)
 
+// Module load monitoring commands for delayed hook support
+// Register interest in a specific module load event for a process.
+// Payload: UMHH_MODULE_WATCH_REQUEST containing PID and module name
+#define CMD_REGISTER_MODULE_WATCH 29
+// Unregister module watch request
+#define CMD_UNREGISTER_MODULE_WATCH 30
+// Kernel -> user notification when watched module loads.
+// Payload: UMHH_MODULE_LOAD_NOTIFICATION containing PID and module info
+#define CMD_MODULE_LOAD_NOTIFY 31
+
 typedef struct _UMHH_MAP_KERNEL_TO_USER_REQUEST {
 	ULONGLONG KernelVa;
 	ULONG     Length;
@@ -104,6 +114,20 @@ typedef struct _UMHH_KERNEL_RW_REQUEST {
 	ULONG Size;          // Number of bytes to transfer (capped in driver)
 	ULONG Flags;         // UMHH_KERNEL_RW_FLAG_* values
 } UMHH_KERNEL_RW_REQUEST, *PUMHH_KERNEL_RW_REQUEST;
+
+// Structure for registering module watch requests
+typedef struct _UMHH_MODULE_WATCH_REQUEST {
+	DWORD ProcessId;                    // Target process ID
+	WCHAR ModuleName[260];              // Module base name to watch (e.g., "kernel32.dll")
+} UMHH_MODULE_WATCH_REQUEST, *PUMHH_MODULE_WATCH_REQUEST;
+
+// Structure for notifying user-mode when watched module loads
+typedef struct _UMHH_MODULE_LOAD_NOTIFICATION {
+	DWORD ProcessId;                    // Process where module loaded
+	WCHAR ModuleName[260];              // Module base name
+	WCHAR FullImagePath[520];           // Full image path of the module
+	ULONGLONG ModuleBase;               // Base address in target process
+} UMHH_MODULE_LOAD_NOTIFICATION, *PUMHH_MODULE_LOAD_NOTIFICATION;
 
 #define UMHH_KERNEL_RW_FLAG_WRITE 0x1
 #define UMHH_KERNEL_RW_MAX_TRANSFER 0x1000u
