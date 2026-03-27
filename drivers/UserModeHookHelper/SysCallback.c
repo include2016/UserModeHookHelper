@@ -4,6 +4,7 @@
 #include "Inject.h"
 #include "StrLib.h"
 #include "DriverCtx.h"
+#include "ModuleWatch.h"
 NTSTATUS SetSysNotifiers() {
 	NTSTATUS status;
 	status = PsSetCreateProcessNotifyRoutine(ProcessCrNotify, FALSE);
@@ -93,6 +94,14 @@ LoadImageNotify(
 	(ProcessId);
 	// Only act when we have a valid image name.
 	if (!FullImageName || FullImageName->Length == 0) return;
+
+	// Check for watched modules and notify user-mode
+	PEPROCESS process = NULL;
+	NTSTATUS st = PsLookupProcessByProcessId(ProcessId, &process);
+	if (NT_SUCCESS(st) && process) {
+		ModuleWatch_CheckAndNotify(FullImageName, process, ImageInfo);
+		ObDereferenceObject(process);
+	}
 
 	// We no longer compute the full-image hash here because matching is
 	// performed at process-create time in ProcessCrNotify (SeLocateProcessImageName).

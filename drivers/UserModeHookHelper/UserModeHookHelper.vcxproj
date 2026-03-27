@@ -63,6 +63,7 @@
     <ClCompile Include="KernelOffsets.c" />
     <ClCompile Include="ListLib.c" />
     <ClCompile Include="mini.c" />
+    <ClCompile Include="ModuleWatch.c" />
     <ClCompile Include="pe.c" />
     <ClCompile Include="PortCtx.c" />
     <ClCompile Include="StrLib.c" />

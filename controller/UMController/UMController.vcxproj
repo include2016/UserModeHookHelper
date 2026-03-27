@@ -138,8 +138,9 @@
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
-      <AdditionalDependencies>$(SolutionDir)$(Platform)\$(Configuration)\ProcessHackerLib.lib;$(SolutionDir)/lib/capstone.lib;fltlib.lib</AdditionalDependencies>
+      <AdditionalDependencies>$(ProjectDir)..\..\$(Platform)\$(Configuration)\ProcessHackerLib.lib;$(ProjectDir)..\..\lib\capstone.lib;fltlib.lib</AdditionalDependencies>
       <AdditionalOptions>/MANIFESTUAC:"level='requireAdministrator' uiAccess='false'" %(AdditionalOptions)</AdditionalOptions>
+      <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
     </Link>
     <Midl>
       <MkTypLibCompatible>false</MkTypLibCompatible>
@@ -247,7 +248,7 @@
       <SubSystem>Windows</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalDependencies>$(SolutionDir)$(Platform)\$(Configuration)\ProcessHackerLib.lib;$(SolutionDir)/lib/capstone.lib;fltlib.lib</AdditionalDependencies>
+      <AdditionalDependencies>$(ProjectDir)..\..\$(Platform)\$(Configuration)\ProcessHackerLib.lib;$(ProjectDir)..\..\lib\capstone.lib;fltlib.lib</AdditionalDependencies>
       <AdditionalOptions>/MANIFESTUAC:"level='requireAdministrator' uiAccess='false'" %(AdditionalOptions)</AdditionalOptions>
     </Link>
     <Midl>
@@ -328,6 +329,9 @@
     <ProjectReference Include="..\EtwTracer\EtwTracer.vcxproj">
       <Project>{e1ddc919-268c-4dd1-b0b5-8ed0d8554887}</Project>
     </ProjectReference>
+    <ProjectReference Include="..\HookCoreLib\HookCoreLib.vcxproj">
+      <Project>{6c2e3e9c-1124-4f5e-9d6f-ac9a9b6e5e21}</Project>
+    </ProjectReference>
     <ProjectReference Include="..\HookUI\HookUI.vcxproj">
       <Project>{5b7c6cf5-5e7d-4f2b-9f2b-a7df2e8a9f10}</Project>
     </ProjectReference>
@@ -356,6 +360,7 @@
     <ClCompile Include="ProcessResolver.cpp" />
     <ClCompile Include="ProcList.cpp" />
     <ClCompile Include="RegistryStore.cpp" />
+    <ClCompile Include="RemoveEarlyBreakDlg.cpp" />
     <ClCompile Include="RemoveHookDlg.cpp" />
     <ClCompile Include="UIHelpers.cpp" />
     <ClCompile Include="UMController.cpp" />

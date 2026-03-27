@@ -13,6 +13,7 @@
 #include <unordered_set>
 #include "ProcessManager.h"
 #include <functional>
+#include "../../Shared/HookServices.h"
 
 // CUMControllerDlg dialog
 class CUMControllerDlg : public CDialogEx
@@ -46,6 +47,8 @@ protected:
 	afx_msg void OnInjectDll();
 	afx_msg void OnAddExecutableToHookList();
 	afx_msg void OnRemoveExecutablesFromHookList();
+	afx_msg void OnAddExecutableToEarlyBreakList();
+	afx_msg void OnRemoveExecutableFromEarlyBreakList();
 	afx_msg void OnClearEtwLog();
 	afx_msg void OnOpenEtwLog();
 	// Help menu handlers
@@ -67,6 +70,7 @@ public:
 	afx_msg void OnMarkEarlyBreak();
 	afx_msg void OnUnmarkEarlyBreak();
 	afx_msg void OnForceInject();
+	afx_msg LRESULT OnModuleLoaded(WPARAM wParam, LPARAM lParam);
 	afx_msg void OnElevateToPpl();
 	afx_msg void OnUnprotectPpl();
 	afx_msg void OnDestroy();
@@ -147,7 +151,24 @@ private:
 	std::unordered_set<unsigned long long> m_PplElevatedSet;
 	std::unordered_set<unsigned long long> m_PplUnprotectedSet;
 
-	// Plugin system
+	// Pending hooks for delayed hooking (module not yet loaded)
+	// Key: PID + module name, Value: list of pending hooks
+public:
+	struct PendingHookKey {
+		DWORD pid;
+		std::wstring moduleName;
+		bool operator==(const PendingHookKey& other) const {
+			return pid == other.pid && moduleName == other.moduleName;
+		}
+	};
+	struct PendingHookKeyHash {
+		size_t operator()(const PendingHookKey& k) const noexcept {
+			return std::hash<DWORD>()(k.pid) ^ std::hash<std::wstring>()(k.moduleName);
+		}
+	};
+	std::unordered_map<PendingHookKey, std::vector<PendingHook>, PendingHookKeyHash> m_PendingHooks;
+
+private:
 	CMenu m_PluginsSubMenu; // submenu showing discovered plugins
 	std::unordered_map<int, std::wstring> m_PluginMap; // cmd id -> dll full path
 	std::unordered_map<int, HMODULE> m_PluginHandles; // loaded plugin handles

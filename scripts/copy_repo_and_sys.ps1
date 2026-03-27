@@ -66,10 +66,111 @@ try {
     Write-Warning ("Failed to compute git changed files: {0}" -f $_.Exception.Message)
 }
 
-$files = @()
-if ($changed.Count -gt 0) {
+# Detect changes in submodules
+$submoduleChanges = @()
+$submodules = git -C $RepoRoot submodule foreach --quiet 'echo $path' 2>$null
+if ($submodules) {
+    foreach ($submodulePath in $submodules) {
+        if (![string]::IsNullOrWhiteSpace($submodulePath)) {
+            $submoduleChanged = @()
+            try {
+                # Check for modified files in submodule
+                $subModifiedRaw = git -C "$RepoRoot\$submodulePath" ls-files -m -z 2>&1
+                if ($LASTEXITCODE -eq 0 -and $subModifiedRaw) {
+                    $submoduleChanged += ($subModifiedRaw -split "`0" | Where-Object {$_ -ne ''} | ForEach-Object { Join-Path $submodulePath $_ })
+                }
+                
+                # Check for staged changes in submodule
+                $subStagedRaw = git -C "$RepoRoot\$submodulePath" diff --name-only --cached -z 2>&1
+                if ($LASTEXITCODE -eq 0 -and $subStagedRaw) {
+                    $submoduleChanged += ($subStagedRaw -split "`0" | Where-Object {$_ -ne ''} | ForEach-Object { Join-Path $submodulePath $_ })
+                }
+                
+                # Check for untracked files in submodule
+                $subUntrackedRaw = git -C "$RepoRoot\$submodulePath" ls-files --others --exclude-standard -z 2>&1
+                if ($LASTEXITCODE -eq 0 -and $subUntrackedRaw) {
+                    $submoduleChanged += ($subUntrackedRaw -split "`0" | Where-Object {$_ -ne ''} | ForEach-Object { Join-Path $submodulePath $_ })
+                }
+            } catch {
+                Write-Warning ("Failed to check submodule '$submodulePath': {0}" -f $_.Exception.Message)
+            }
+            
+            if ($submoduleChanged.Count -gt 0) {
+                $submoduleChanges += $submoduleChanged
+                Write-Output ("Detected $($submoduleChanged.Count) changed file(s) in submodule: $submodulePath")
+            }
+        }
+    }
+}
+
+# Combine parent repo changes and submodule changes
+$allChanges = @()
+if ($changed.Count -gt 0) { $allChanges += $changed }
+if ($submoduleChanges.Count -gt 0) { $allChanges += $submoduleChanges }
+
+if ($allChanges.Count -gt 0) {
     # Remove duplicates and normalize
-    $files = $changed | Sort-Object -Unique
+    # Filter out build intermediates and unnecessary files
+    $exclusionPatterns = @(
+        '*.sln',         # Visual Studio solution files
+        '*.obj',         # Object files
+        '*.pdb',         # Debug symbols
+        '*.ilk',         # Linker intermediate files
+        '*.exp',         # Export files
+        '*.lib',         # Library files (unless source controlled)
+        '*.exe',         # Executables (build output)
+        '*.dll',         # DLLs (build output)
+        '*.tmp',         # Temporary files
+        '*.log',         # Log files
+        '*~',            # Backup files
+        '*.orig',        # Original backup files
+        'x64\*',          # x64 build output directory
+        'x86\*',          # x86 build output directory
+        'Debug\*',       # Debug build output
+        'Release\*',     # Release build output
+        'bin\*',         # Binary output directories
+        'obj\*',         # Object file directories
+        '.vs\*',         # Visual Studio user-specific files
+        '.vscode\*'      # VS Code user-specific files (if not source controlled)
+    )
+    
+    $files = $allChanges | Where-Object {
+        $file = $_
+        $shouldInclude = $true
+        
+        # Check each exclusion pattern
+        foreach ($pattern in $exclusionPatterns) {
+            # Handle wildcard patterns
+            if ($pattern -like '*\*') {
+                # Directory-based pattern (e.g., x64/*, Debug/*)
+                $dirPattern = $pattern.TrimEnd('*')
+                if ($file -like "$dirPattern*" -or $file -like "*\$dirPattern*") {
+                    $shouldInclude = $false
+                    break
+                }
+            } elseif ($pattern -like '**') {
+                # Simple extension pattern (e.g., *.obj)
+                $extension = $pattern.TrimStart('*')
+                if ($file -like "*$extension") {
+                    $shouldInclude = $false
+                    break
+                }
+            } else {
+                # Exact match or simple pattern
+                if ($file -like $pattern) {
+                    $shouldInclude = $false
+                    break
+                }
+            }
+        }
+        
+        return $shouldInclude
+    } | Sort-Object -Unique
+    
+    $filteredCount = $allChanges.Count - $files.Count
+    if ($filteredCount -gt 0) {
+        Write-Output "Filtered out $filteredCount build/unnecessary file(s)"
+    }
 } else {
     # Fallback: if no changes detected, do nothing (skip copying tracked files)
     Write-Output "No changed or untracked files detected by git; nothing to copy."

@@ -276,6 +276,32 @@ void Filter::RunListenerLoop() {
 						}
 					}
 			}
+			else if (msg->m_Cmd == CMD_MODULE_LOAD_NOTIFY) {
+				// Payload: [DWORD pid][WCHAR moduleName][WCHAR fullPath][ULONGLONG base]
+				if (payloadBytes >= sizeof(DWORD) + sizeof(WCHAR) + sizeof(ULONGLONG)) {
+					DWORD pid = 0;
+					memcpy(&pid, msg->m_Data, sizeof(DWORD));
+					
+					// Parse module name (null-terminated)
+					const wchar_t* moduleName = (const wchar_t*)(msg->m_Data + sizeof(DWORD));
+					size_t moduleNameLen = wcslen(moduleName);
+					
+					// Parse full path (null-terminated, follows module name)
+					const wchar_t* fullPath = moduleName + moduleNameLen + 1;
+					
+					// Parse base address (follows full path)
+					size_t fullPathLen = wcslen(fullPath);
+					const wchar_t* basePtr = fullPath + fullPathLen + 1;
+					ULONGLONG base = 0;
+					if ((const char*)basePtr < (const char*)msg->m_Data + payloadBytes - sizeof(ULONGLONG)) {
+						memcpy(&base, basePtr, sizeof(ULONGLONG));
+					}
+					
+					if (m_ModuleLoadCb) {
+						m_ModuleLoadCb(pid, moduleName, fullPath, base, m_ModuleLoadCtx);
+					}
+				}
+			}
 		}
 		// Loop
 	}
@@ -308,6 +334,16 @@ void Filter::RegisterApcQueuedCallback(ProcessApcQueuedCb cb, void* ctx) {
 void Filter::UnregisterApcQueuedCallback() {
 	m_ApcQueuedCb = NULL;
 	m_ApcQueuedCtx = NULL;
+}
+
+void Filter::RegisterModuleLoadCallback(ModuleLoadNotifyCb cb, void* ctx) {
+	m_ModuleLoadCb = cb;
+	m_ModuleLoadCtx = ctx;
+}
+
+void Filter::UnregisterModuleLoadCallback() {
+	m_ModuleLoadCb = NULL;
+	m_ModuleLoadCtx = NULL;
 }
 
 void Filter::StartListener() {
@@ -1039,6 +1075,65 @@ bool Filter::FLTCOMM_EnumHookPaths(std::vector<std::wstring>& outPaths) {
 		i += s.size() + 1;
 	}
 	return true;
+}
+
+bool Filter::FLTCOMM_RegisterModuleWatch(DWORD pid, const std::wstring& moduleName) {
+	const size_t maxModule = 260;
+	if (moduleName.empty() || moduleName.size() >= maxModule) return false;
+	
+	// Send full UMHH_MODULE_WATCH_REQUEST structure (fixed size)
+	ULONG msgSize = UMHH_MSG_HEADER_SIZE + sizeof(DWORD) + 260 * sizeof(WCHAR);
+	std::unique_ptr<BYTE[]> msgBuf(new BYTE[msgSize]);
+	PUMHH_COMMAND_MESSAGE msg = (PUMHH_COMMAND_MESSAGE)msgBuf.get();
+	memset(msg, 0, msgSize);
+	msg->m_Cmd = CMD_REGISTER_MODULE_WATCH;
+	
+	// Write PID
+	memcpy(msg->m_Data, &pid, sizeof(DWORD));
+	// Write module name (fixed 260 WCHAR array, null-padded)
+	wcsncpy_s((WCHAR*)(msg->m_Data + sizeof(DWORD)), 260, moduleName.c_str(), _TRUNCATE);
+	
+	BYTE replyBuf[sizeof(NTSTATUS)];
+	DWORD bytesOut = 0;
+	HRESULT hr = FilterSendMessage(m_Port, msg, msgSize, replyBuf, sizeof(replyBuf), &bytesOut);
+	if (hr != S_OK || bytesOut < sizeof(NTSTATUS)) return false;
+	
+	NTSTATUS status = *(NTSTATUS*)replyBuf;
+	return NT_SUCCESS(status);
+}
+
+bool Filter::FLTCOMM_UnregisterModuleWatch(DWORD pid, const std::wstring& moduleName) {
+	const size_t maxModule = 260;
+	if (moduleName.size() >= maxModule) return false;
+	
+	// Send full UMHH_MODULE_WATCH_REQUEST structure (fixed size)
+	ULONG msgSize = UMHH_MSG_HEADER_SIZE + sizeof(DWORD) + 260 * sizeof(WCHAR);
+	std::unique_ptr<BYTE[]> msgBuf(new BYTE[msgSize]);
+	PUMHH_COMMAND_MESSAGE msg = (PUMHH_COMMAND_MESSAGE)msgBuf.get();
+	memset(msg, 0, msgSize);
+	msg->m_Cmd = CMD_UNREGISTER_MODULE_WATCH;
+	
+	// Write PID
+	memcpy(msg->m_Data, &pid, sizeof(DWORD));
+	// Write module name (fixed 260 WCHAR array, null-padded)
+	// Empty string means unregister all
+	if (!moduleName.empty()) {
+		wcsncpy_s((WCHAR*)(msg->m_Data + sizeof(DWORD)), 260, moduleName.c_str(), _TRUNCATE);
+	} else {
+		memset(msg->m_Data + sizeof(DWORD), 0, 260 * sizeof(WCHAR));
+	}
+	
+	BYTE replyBuf[sizeof(NTSTATUS)];
+	DWORD bytesOut = 0;
+	HRESULT hr = FilterSendMessage(m_Port, msg, msgSize, replyBuf, sizeof(replyBuf), &bytesOut);
+	if (hr != S_OK || bytesOut < sizeof(NTSTATUS)) return false;
+	
+	NTSTATUS status = *(NTSTATUS*)replyBuf;
+	return NT_SUCCESS(status);
+}
+
+bool Filter::FLTCOMM_UnregisterAllModuleWatches(DWORD pid) {
+	return FLTCOMM_UnregisterModuleWatch(pid, L"");
 }
 
 Filter::~Filter() {

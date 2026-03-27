@@ -1,10 +1,11 @@
-﻿#include "FltCommPort.h"
+#include "FltCommPort.h"
 #include "Trace.h"
 #include "UKShared.h"
 #include "HookList.h"
 #include "PortCtx.h"
 #include "DriverCtx.h"
 #include "Inject.h"
+#include "ModuleWatch.h"
 #include "PE.h"
 #include "KernelOffsets.h"
 #include "mini.h"
@@ -55,6 +56,9 @@ static NTSTATUS Handle_WriteProcessMemory(PCOMM_CONTEXT CallerCtx, PUMHH_COMMAND
 static NTSTATUS Handle_DuplicateHandleKernel(PCOMM_CONTEXT CallerCtx, PUMHH_COMMAND_MESSAGE msg, ULONG InputBufferSize, PVOID OutputBuffer, ULONG OutputBufferSize, PULONG ReturnOutputBufferLength);
 static NTSTATUS Handle_MapKernelToUser(PUMHH_COMMAND_MESSAGE msg, ULONG InputBufferSize, PVOID OutputBuffer, ULONG OutputBufferSize, PULONG ReturnOutputBufferLength);
 static NTSTATUS Handle_FreeMdl(PUMHH_COMMAND_MESSAGE msg, ULONG InputBufferSize, PVOID OutputBuffer, ULONG OutputBufferSize, PULONG ReturnOutputBufferLength);
+// Module watch handlers for delayed hook support
+static NTSTATUS Handle_RegisterModuleWatch(PUMHH_COMMAND_MESSAGE msg, ULONG InputBufferSize, PVOID OutputBuffer, ULONG OutputBufferSize, PULONG ReturnOutputBufferLength);
+static NTSTATUS Handle_UnregisterModuleWatch(PUMHH_COMMAND_MESSAGE msg, ULONG InputBufferSize, PVOID OutputBuffer, ULONG OutputBufferSize, PULONG ReturnOutputBufferLength);
 
 
 VOID KmhhFreeMappedRegion(KMHH_MAP_CONTEXT* ctx);
@@ -379,6 +383,14 @@ Comm_MessageNotify(
 		break;
 	case CMD_FREE_MDL:
 		status = Handle_FreeMdl(msg, InputBufferSize, OutputBuffer, OutputBufferSize, ReturnOutputBufferLength);
+		break;
+
+	// Module watch commands for delayed hook support
+	case CMD_REGISTER_MODULE_WATCH:
+		status = Handle_RegisterModuleWatch(msg, InputBufferSize, OutputBuffer, OutputBufferSize, ReturnOutputBufferLength);
+		break;
+	case CMD_UNREGISTER_MODULE_WATCH:
+		status = Handle_UnregisterModuleWatch(msg, InputBufferSize, OutputBuffer, OutputBufferSize, ReturnOutputBufferLength);
 		break;
 
 	default:
@@ -710,6 +722,70 @@ NTSTATUS Comm_BroadcastApcQueued(DWORD ProcessId, PULONG outNotifiedCount) {
 			}
 			else {
 				// other failures
+			}
+		}
+	}
+
+	ExFreePool(msg);
+	PortCtx_FreeSnapshot(arr, count);
+	if (outNotifiedCount) *outNotifiedCount = notified;
+	return STATUS_SUCCESS;
+}
+
+NTSTATUS Comm_BroadcastModuleLoad(DWORD ProcessId, PUNICODE_STRING ModuleName, ULONGLONG ModuleBase, PULONG outNotifiedCount) {
+	NTSTATUS status = STATUS_SUCCESS;
+	PCOMM_CONTEXT* arr = NULL;
+	ULONG count = 0;
+	if (outNotifiedCount) *outNotifiedCount = 0;
+	status = PortCtx_Snapshot(&arr, &count);
+	if (!NT_SUCCESS(status)) return status;
+	if (count == 0) return STATUS_SUCCESS;
+
+	// Build message: [DWORD pid][WCHAR moduleName][ULONGLONG base]
+	ULONG moduleNameSize = ModuleName ? ModuleName->Length : 0;
+	ULONG payloadSize = sizeof(DWORD) + moduleNameSize + sizeof(WCHAR) + sizeof(ULONGLONG);
+	ULONG msgSize = UMHH_MSG_HEADER_SIZE + payloadSize;
+	PUMHH_COMMAND_MESSAGE msg = ExAllocatePoolWithTag(NonPagedPool, msgSize, tag_port);
+	if (!msg) {
+		PortCtx_FreeSnapshot(arr, count);
+		return STATUS_INSUFFICIENT_RESOURCES;
+	}
+	RtlZeroMemory(msg, msgSize);
+	msg->m_Cmd = CMD_MODULE_LOAD_NOTIFY;
+	
+	ULONG offset = 0;
+	// Write PID
+	RtlCopyMemory(msg->m_Data + offset, &ProcessId, sizeof(DWORD));
+	offset += sizeof(DWORD);
+	
+	// Write module name (null-terminated)
+	if (moduleNameSize > 0) {
+		RtlCopyMemory(msg->m_Data + offset, ModuleName->Buffer, moduleNameSize);
+		offset += moduleNameSize;
+	}
+	// Null terminator
+	RtlZeroMemory(msg->m_Data + offset, sizeof(WCHAR));
+	offset += sizeof(WCHAR);
+	
+	// Write module base
+	RtlCopyMemory(msg->m_Data + offset, &ModuleBase, sizeof(ULONGLONG));
+
+	ULONG notified = 0;
+	for (ULONG i = 0; i < count; ++i) {
+		PCOMM_CONTEXT ctx = arr[i];
+		if (!ctx || ctx->m_ClientPort == NULL) continue;
+		LARGE_INTEGER timeout;
+		timeout.QuadPart = -10000000LL; // 1 second timeout
+		NTSTATUS st = FltSendMessage(DriverCtx_GetFilter(), &ctx->m_ClientPort, msg, msgSize, NULL, 0, &timeout);
+		if (NT_SUCCESS(st)) {
+			notified++;
+		}
+		else {
+			Log(L"Comm_BroadcastModuleLoad: FltSendMessage failed for client pid %d port %p st=0x%x\n",
+				ctx->m_UserProcessId, ctx->m_ClientPort, st);
+			if (st == STATUS_PORT_DISCONNECTED) {
+				Log(L"Comm_BroadcastModuleLoad: port appears disconnected, removing ctx for pid %d\n", ctx->m_UserProcessId);
+				PortCtx_Remove(ctx);
 			}
 		}
 	}
@@ -1758,6 +1834,55 @@ static NTSTATUS Handle_FreeMdl(PUMHH_COMMAND_MESSAGE msg, ULONG InputBufferSize,
 	if (ReturnOutputBufferLength) *ReturnOutputBufferLength = sizeof(NTSTATUS);
 	return STATUS_SUCCESS;
 } 
+
+// Module watch handlers for delayed hook support
+static NTSTATUS Handle_RegisterModuleWatch(PUMHH_COMMAND_MESSAGE msg, ULONG InputBufferSize, PVOID OutputBuffer, ULONG OutputBufferSize, PULONG ReturnOutputBufferLength) {
+	ULONG minSize = (ULONG)(UMHH_MSG_HEADER_SIZE + sizeof(UMHH_MODULE_WATCH_REQUEST));
+	if (InputBufferSize < minSize) {
+		if (ReturnOutputBufferLength) *ReturnOutputBufferLength = sizeof(NTSTATUS);
+		return STATUS_BUFFER_TOO_SMALL;
+	}
+	
+	UMHH_MODULE_WATCH_REQUEST req = { 0 };
+	RtlCopyMemory(&req, msg->m_Data, sizeof(req));
+	
+	UNICODE_STRING moduleName;
+	RtlInitUnicodeString(&moduleName, req.ModuleName);
+	
+	NTSTATUS status = ModuleWatch_Register(req.ProcessId, &moduleName);
+	
+	if (OutputBuffer && OutputBufferSize >= sizeof(NTSTATUS))
+		RtlCopyMemory(OutputBuffer, &status, sizeof(NTSTATUS));
+	if (ReturnOutputBufferLength) *ReturnOutputBufferLength = sizeof(NTSTATUS);
+	return status;
+}
+
+static NTSTATUS Handle_UnregisterModuleWatch(PUMHH_COMMAND_MESSAGE msg, ULONG InputBufferSize, PVOID OutputBuffer, ULONG OutputBufferSize, PULONG ReturnOutputBufferLength) {
+	ULONG minSize = (ULONG)(UMHH_MSG_HEADER_SIZE + sizeof(UMHH_MODULE_WATCH_REQUEST));
+	if (InputBufferSize < minSize) {
+		if (ReturnOutputBufferLength) *ReturnOutputBufferLength = sizeof(NTSTATUS);
+		return STATUS_BUFFER_TOO_SMALL;
+	}
+	
+	UMHH_MODULE_WATCH_REQUEST req = { 0 };
+	RtlCopyMemory(&req, msg->m_Data, sizeof(req));
+	
+	UNICODE_STRING moduleName;
+	if (req.ModuleName[0] != L'\0') {
+		RtlInitUnicodeString(&moduleName, req.ModuleName);
+	} else {
+		moduleName.Buffer = NULL;
+		moduleName.Length = 0;
+		moduleName.MaximumLength = 0;
+	}
+	
+	NTSTATUS status = ModuleWatch_Unregister(req.ProcessId, &moduleName);
+	
+	if (OutputBuffer && OutputBufferSize >= sizeof(NTSTATUS))
+		RtlCopyMemory(OutputBuffer, &status, sizeof(NTSTATUS));
+	if (ReturnOutputBufferLength) *ReturnOutputBufferLength = sizeof(NTSTATUS);
+	return status;
+}
 BOOLEAN KmhhMapKernelRegionToUser(KMHH_MAP_CONTEXT* ctx,
 	PVOID kernelVa,
 	SIZE_T length,

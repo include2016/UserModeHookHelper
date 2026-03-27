@@ -51,16 +51,16 @@ void HookActions::HandleAddHook(CUMControllerDlg* dlg, Filter* filter, CListCtrl
 
     std::wstring ntPath;
     if (!Helper::ResolveProcessNtImagePath(pid, *filter, ntPath)) {
-        app.GetETW().Log(L"OnAddHook: failed to resolve NT path for pid %u\n", pid);
+		LOG_CTRL_ETW(L"OnAddHook: failed to resolve NT path for pid %u\n", pid);
         MessageBox(NULL, L"Failed to resolve process image path. The process may have exited.", L"Add Hook", MB_OK | MB_ICONERROR);
         return;
     }
 
-    app.GetETW().Log(L"OnAddHook: adding hook for pid %u ntpath=%s\n", pid, ntPath.c_str());
+	LOG_CTRL_ETW(L"OnAddHook: adding hook for pid %u ntpath=%s\n", pid, ntPath.c_str());
 
     bool ok = filter->FLTCOMM_AddHook(ntPath);
     if (!ok) {
-        app.GetETW().Log(L"OnAddHook: FLTCOMM_AddHook failed for %s\n", ntPath.c_str());
+		LOG_CTRL_ETW(L"OnAddHook: FLTCOMM_AddHook failed for %s\n", ntPath.c_str());
         MessageBox(NULL, L"Failed to add hook entry in kernel.", L"Add Hook", MB_OK | MB_ICONERROR);
         return;
     }

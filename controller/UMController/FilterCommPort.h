@@ -27,7 +27,7 @@ public:
 	bool FLTCOMM_EnumHookPaths(std::vector<std::wstring>& outPaths);
 	// (Path resolution moved to Helper::ResolveDosPathToNtPath)
 	// Add or remove hook entries in kernel (NT path is passed as UTF-16LE)
-	bool Filter::FLTCOMM_AddHook(const std::wstring& ntPath);
+	bool FLTCOMM_AddHook(const std::wstring& ntPath);
 	bool FLTCOMM_RemoveHookByHash(ULONGLONG hash);
 	~Filter();
 	// Register a callback that will be invoked when the kernel sends
@@ -92,6 +92,19 @@ public:
     // Request driver to register/unregister an Ob callback. Payload: BOOLEAN registerFlag (1=register,0=unregister)
     // Returns true on success.
     bool FLTCOMM_RegisterObCallback(bool registerFlag);
+	
+	// Module watch functions for delayed hook support
+	// Register to be notified when a specific module loads in a target process
+	bool FLTCOMM_RegisterModuleWatch(DWORD pid, const std::wstring& moduleName);
+	// Unregister module watch
+	bool FLTCOMM_UnregisterModuleWatch(DWORD pid, const std::wstring& moduleName);
+	// Unregister all module watches for a process
+	bool FLTCOMM_UnregisterAllModuleWatches(DWORD pid);
+	
+	// Register callback for module load notifications
+	typedef void(__cdecl *ModuleLoadNotifyCb)(DWORD pid, const wchar_t* moduleName, const wchar_t* fullPath, ULONGLONG base, void* ctx);
+	void RegisterModuleLoadCallback(ModuleLoadNotifyCb cb, void* ctx);
+	void UnregisterModuleLoadCallback();
 private:
 	HANDLE m_Port = INVALID_HANDLE_VALUE;
 	// listener state for async messages
@@ -105,6 +118,11 @@ private:
 	// APC queued callback and context
 	ProcessApcQueuedCb m_ApcQueuedCb = NULL;
 	void* m_ApcQueuedCtx = NULL;
+	
+	// Module load notification callback and context
+	ModuleLoadNotifyCb m_ModuleLoadCb = NULL;
+	void* m_ModuleLoadCtx = NULL;
+	
 	void RunListenerLoop();
 	static VOID NTAPI ListenerWorkItem(PVOID context, PVOID systemArg1, PVOID systemArg2);
 
