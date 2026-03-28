@@ -32,6 +32,10 @@
 #include "../ProcessHackerLib/phlib_expose.h"
 #include "../HookCoreLib/HookCore.h"
 
+// DllLoadMon types
+#include "../hook_component/DllLoadMon/DllLoadMon.h"
+#include "LdrLoadDllOffsets.h"
+
 #ifdef _DEBUG
 #define new DEBUG_NEW
 #endif
@@ -507,6 +511,145 @@ public:
 		 if (!f) return false;
 		 return f->FLTCOMM_RegisterModuleWatch(pid, moduleName);
 	 }
+	 bool RegisterModuleWatch(DWORD pid, const wchar_t* moduleName) override {
+		 // Rev6 Implementation: Calculate MD5, load DllLoadMon.dll, inject via ApplyHook
+		 LOG_CTRL_ETW(L"[UMCtrl] RegisterModuleWatch: PID=%lu, Module=%s", pid, moduleName);
+		 
+		 // 1. Determine process architecture
+		 bool is64Bit = false;
+		 if (!Helper::IsProcess64(pid, is64Bit)) {
+			 LOG_CTRL_ETW(L"[UMCtrl] Failed to determine process architecture for PID %lu", pid);
+			 return false;
+		 }
+		 
+		 // 2. Calculate ntdll MD5 and get LdrLoadDll return offset
+		 DWORD64 ldrLoadDllRetOffset = CalculateNtdllLdrLoadDllRetOffset(pid, is64Bit);
+		 if (ldrLoadDllRetOffset == 0) {
+			 LOG_CTRL_ETW(L"[UMCtrl] Failed to get LdrLoadDll return offset for PID %lu", pid);
+			 return false;
+		 }
+		 LOG_CTRL_ETW(L"[UMCtrl] LdrLoadDll return offset: 0x%llX", ldrLoadDllRetOffset);
+		 
+		 // 3. Get ntdll base address in target process
+		 DWORD64 ntdllBase = 0;
+		 if (!Helper::GetModuleBase(pid, L"ntdll.dll", &ntdllBase)) {
+			 LOG_CTRL_ETW(L"[UMCtrl] Failed to get ntdll base for PID %lu", pid);
+			 return false;
+		 }
+		 
+		 // 4. Calculate actual LdrLoadDll return address
+		 ULONGLONG ldrLoadDllRetAddress = ntdllBase + ldrLoadDllRetOffset;
+		 LOG_CTRL_ETW(L"[UMCtrl] LdrLoadDll return address: 0x%p", (PVOID)ldrLoadDllRetAddress);
+		 
+		 // 5. Load DllLoadMon.dll and get DllLoadMonHook address
+		 HMODULE hDllLoadMon = LoadLibraryW(L"DllLoadMon.dll");
+		 if (!hDllLoadMon) {
+			 LOG_CTRL_ETW(L"[UMCtrl] Failed to load DllLoadMon.dll: %lu", GetLastError());
+			 return false;
+		 }
+		 
+		 PFN_DllLoadMonHook pfnDllLoadMonHook = (PFN_DllLoadMonHook)GetProcAddress(hDllLoadMon, "DllLoadMonHook");
+		 if (!pfnDllLoadMonHook) {
+			 LOG_CTRL_ETW(L"[UMCtrl] Failed to get DllLoadMonHook address: %lu", GetLastError());
+			 FreeLibrary(hDllLoadMon);
+			 return false;
+		 }
+		 LOG_CTRL_ETW(L"[UMCtrl] DllLoadMonHook address: %p", (PVOID)pfnDllLoadMonHook);
+		 
+		 // 6. Open target process
+		 HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
+		 if (!hProcess) {
+			 LOG_CTRL_ETW(L"[UMCtrl] Failed to open process %lu: %lu", pid, GetLastError());
+			 FreeLibrary(hDllLoadMon);
+			 return false;
+		 }
+		 
+		 // 7. Create event handles (will be duplicated to target process)
+		 WCHAR loadEventName[64], releaseEventName[64];
+		 swprintf_s(loadEventName, L"Global\\DelayHook_Load_%lu", pid);
+		 swprintf_s(releaseEventName, L"Global\\DelayHook_Release_%lu", pid);
+		 
+		 HANDLE hEventLoad = CreateEventW(NULL, FALSE, FALSE, loadEventName);
+		 HANDLE hEventRelease = CreateEventW(NULL, FALSE, FALSE, releaseEventName);
+		 
+		 if (!hEventLoad || !hEventRelease) {
+			 LOG_CTRL_ETW(L"[UMCtrl] Failed to create events: %lu", GetLastError());
+			 CloseHandle(hProcess);
+			 FreeLibrary(hDllLoadMon);
+			 return false;
+		 }
+		 
+		 // 8. Allocate shared memory in target process for DllLoadMonSharedData
+		 SIZE_T sharedDataSize = sizeof(DllLoadMonSharedData);
+		 PVOID pSharedData = VirtualAllocEx(hProcess, NULL, sharedDataSize, 
+											MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+		 if (!pSharedData) {
+			 LOG_CTRL_ETW(L"[UMCtrl] Failed to allocate shared memory: %lu", GetLastError());
+			 CloseHandle(hEventRelease);
+			 CloseHandle(hEventLoad);
+			 CloseHandle(hProcess);
+			 FreeLibrary(hDllLoadMon);
+			 return false;
+		 }
+		 
+		 // 9. Prepare shared data structure
+		 DllLoadMonSharedData sharedData = {0};
+		 sharedData.hLoadEvent = hEventLoad;  // Will be duplicated by hook code
+		 sharedData.hReleaseEvent = hEventRelease;
+		 sharedData.pModuleBaseList = nullptr;  // Will be allocated by hook code
+		 sharedData.pModuleNameList = nullptr;
+		 sharedData.dwWatchCount = 1;
+		 InitializeSRWLock(&sharedData.WatchListLock);
+		 
+		 // 10. Write shared data to target process
+		 if (!Helper::WriteProcessMemoryWrap(hProcess, pSharedData, &sharedData, sharedDataSize, NULL)) {
+			 LOG_CTRL_ETW(L"[UMCtrl] Failed to write shared data: %lu", GetLastError());
+			 VirtualFreeEx(hProcess, pSharedData, 0, MEM_RELEASE);
+			 CloseHandle(hEventRelease);
+			 CloseHandle(hEventLoad);
+			 CloseHandle(hProcess);
+			 FreeLibrary(hDllLoadMon);
+			 return false;
+		 }
+		 
+		 // 11. Call HookCore::ApplyHook to inject DllLoadMonHook
+		 DWORD originalAsmLen = 0;
+		 PVOID trampolinePit = nullptr;
+		 PVOID originalAsmAddr = nullptr;
+		 
+		 bool result = HookCore::ApplyHook(
+			 pid,
+			 ldrLoadDllRetAddress,
+			 &g_HookServices,
+			 (DWORD64)pfnDllLoadMonHook,
+			 -1,  // Hook ID (-1 for internal)
+			 &originalAsmLen,
+			 &trampolinePit,
+			 &originalAsmAddr
+		 );
+		 
+		 if (!result) {
+			 LOG_CTRL_ETW(L"[UMCtrl] ApplyHook failed for PID %lu", pid);
+			 VirtualFreeEx(hProcess, pSharedData, 0, MEM_RELEASE);
+			 CloseHandle(hEventRelease);
+			 CloseHandle(hEventLoad);
+			 CloseHandle(hProcess);
+			 FreeLibrary(hDllLoadMon);
+			 return false;
+		 }
+		 
+		 LOG_CTRL_ETW(L"[UMCtrl] Successfully registered module watch for PID %lu, module %s", pid, moduleName);
+		 
+		 // Note: Event handles will be used by the hook code in target process
+		 // They will be closed when the process terminates
+		 
+		 FreeLibrary(hDllLoadMon);
+		 CloseHandle(hProcess);
+		 // Note: Don't close event handles - they're used by the hook code
+		 
+		 return true;
+	 }
+	 
 	 void RegisterModuleLoadCallback(ModuleLoadCallback callback, void* context) override {
 		 Filter* f = Helper::GetFilterInstance();
 		 if (!f) return;

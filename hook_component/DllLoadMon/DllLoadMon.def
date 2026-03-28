@@ -1,0 +1,9 @@
+; DllLoadMon.def - Module definition file for export symbols
+; Rev6: Only DllLoadMonHook is required, DllLoadMon_Initialize is optional
+
+LIBRARY "DllLoadMon"
+DESCRIPTION "DLL Load Monitor - Hook Code Provider"
+
+EXPORTS
+    DllLoadMonHook @1 PRIVATE
+    DllLoadMon_Initialize @2 PRIVATE

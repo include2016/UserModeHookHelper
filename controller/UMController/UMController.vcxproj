@@ -348,6 +348,7 @@
     <ClCompile Include="Helper.cpp" />
     <ClCompile Include="HookActions.cpp" />
     <ClCompile Include="IPC.cpp" />
+    <ClCompile Include="LdrLoadDllOffsets.cpp" />
     <ClCompile Include="pch.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Out|x64'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Create</PrecompiledHeader>
