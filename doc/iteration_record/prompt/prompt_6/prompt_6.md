@@ -1,0 +1,9 @@
+对C:\Users\x\Downloads\amsi_tracer-main\doc\iteration_record\result_5\DelayHook_Implementation_Plan_CN_Rev5.md的修改意见
+
+我发现你有一个重大误解，那就是对DllLoadMon模块的误解
+
+该模块本身并不负责对ntdll的hook工作，他只通过导出函数DllLoadMonHook提供hook的逻辑代码（即获取rdi执行的字符串，和监视列表对比，通知umcontroller等代码逻辑）
+
+真正进行注入操作的是UmController模块，通过复用已经存在的基础设施来进行注入
+
+根据修改意见迭代新的设计文档，放到C:\Users\x\Downloads\amsi_tracer-main\doc\iteration_record\result\result_6
