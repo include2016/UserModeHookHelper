@@ -1,4 +1,4 @@
-// Clean, corrected implementation with multi-column sorting support
+﻿// Clean, corrected implementation with multi-column sorting support
 
 #include "HookProcDlg.h"
 #include "../../Shared/LogMacros.h"
@@ -207,10 +207,11 @@ void HookProcDlg::OnBnClickedApplyHookSequence() {
 		if (!m_services->GetModuleBase( targetPid, mod.c_str(), &base) || base == 0) { 
 			LOG_UI(m_services,L"HookSeq: module %s not loaded (base=%p), registering for delayed hook\n", mod.c_str(), (void*)base); 
 			
-			// Register module watch for delayed hooking
-			m_services->RegisterModuleWatch(targetPid, mod.c_str());
+			// ⭐ CRITICAL FIX: Register module watch to setup LdrLoadDll hook
+			// Without this, the DelayHook_Load event will never be signaled
+			m_DllLoadMonMgr.RegisterModuleWatch(targetPid, mod.c_str());
 			
-			// Create pending hook entry
+			// Create pending hook entry and store locally
 			PendingHook pending;
 			pending.pid = targetPid;
 			pending.module = mod;
@@ -218,9 +219,50 @@ void HookProcDlg::OnBnClickedApplyHookSequence() {
 			pending.dllPath = dll;
 			pending.exportName = exp;
 			pending.address = 0; // Will be resolved when module loads
-			m_services->AddPendingHook(pending);
+			
+			// Store in local map for later application
+			PendingHookKey key{targetPid, mod};
+			m_PendingHooks[key].push_back(pending);
 			
 			LOG_UI(m_services, L"HookSeq: registered pending hook for %s!%s\n", dll.c_str(), exp.c_str());
+			
+			// Start monitor thread if not already running for this PID+module
+			bool needNewThread = true;
+			
+			MonitorParams* params = new MonitorParams;
+			params->processId = targetPid;
+			if (!m_services->GetHighAccessProcHandle(targetPid, &params->hProcess)) {
+				LOG_UI(m_services, L"failed to call GetHighAccessProcHandle, targetPid=%u\n", targetPid);
+				MessageBoxW(L"failed to call GetHighAccessProcHandle", L"HookSeq", MB_ICONERROR | MB_OK);
+				return;
+			}
+			params->moduleName = mod;
+			params->pDlg = this;
+			
+			std::wstring loadEventName = L"Global\\DelayHook_Load_" + std::to_wstring(targetPid);
+			std::wstring releaseEventName = L"Global\\DelayHook_Release_" + std::to_wstring(targetPid);
+			
+			params->hEventLoad = CreateEventW(NULL, FALSE, FALSE, loadEventName.c_str());
+			params->hEventRelease = CreateEventW(NULL, FALSE, FALSE, releaseEventName.c_str());
+			
+			if (!params->hEventLoad || !params->hEventRelease) {
+				LOG_UI(m_services, L"Failed to create delay hook events for PID %lu", targetPid);
+				delete params;
+				continue; 
+			}
+			
+			HANDLE hThread = CreateThread(NULL, 0, DelayHookMonitorThread, params, 0, NULL);
+			if (hThread) {
+				CloseHandle(hThread);
+				LOG_UI(m_services, L"Started delay hook monitor thread for PID %lu, module %s", targetPid, mod.c_str());
+			} else {
+				LOG_UI(m_services, L"Failed to create monitor thread for PID %lu", targetPid);
+				CloseHandle(params->hEventLoad);
+				CloseHandle(params->hEventRelease);
+				CloseHandle(params->hProcess);
+				delete params;
+			}
+			
 			continue; 
 		}
 		bool ok = true;
@@ -320,7 +362,7 @@ RollBack:
 	}
 }
 HookProcDlg::HookProcDlg(DWORD pid, const std::wstring& name, IHookServices* services, CWnd* parent)
-	: CDialogEx(IDD_HOOKUI_PROC_DLG, parent), m_pid(pid), m_name(name), m_services(services) {
+	: CDialogEx(IDD_HOOKUI_PROC_DLG, parent), m_pid(pid), m_name(name), m_services(services), m_DllLoadMonMgr(services) {
 }
 
 BOOL HookProcDlg::CreateModeless(CWnd* parent) { return Create(IDD_HOOKUI_PROC_DLG, parent); }
@@ -798,6 +840,187 @@ void HookProcDlg::OnCustomDrawModules(NMHDR* pNMHDR, LRESULT* pResult) {
 	*pResult = CDRF_DODEFAULT;
 }
 
+// ============================================================================
+// Delay Hook Implementation
+// ============================================================================
+
+DWORD WINAPI HookProcDlg::DelayHookMonitorThread(LPVOID lpParam)
+{
+	MonitorParams* params = (MonitorParams*)lpParam;
+	HookProcDlg* pDlg = params->pDlg;
+    
+	// Wait for DLL load notification
+	DWORD waitResult = WaitForSingleObject(params->hEventLoad, INFINITE);
+	if (waitResult != WAIT_OBJECT_0) {
+		LOG_UI(pDlg->m_services, L"[DelayHook] WaitForSingleObject failed for PID %lu", params->processId);
+		delete params;
+		return 1;
+	}
+    
+	LOG_UI(pDlg->m_services, L"[DelayHook] DLL load notification received for PID %lu", params->processId);
+    
+	// Apply pending hooks
+	pDlg->ApplyPendingHooks(params->processId, params->moduleName);
+    
+	// Signal release event to unblock DllLoadMon
+	SetEvent(params->hEventRelease);
+	LOG_UI(pDlg->m_services, L"[DelayHook] Signaled release event for PID %lu", params->processId);
+    
+	// Cleanup
+	CloseHandle(params->hEventLoad);
+	CloseHandle(params->hEventRelease);
+	CloseHandle(params->hProcess);
+	delete params;
+    
+	LOG_UI(pDlg->m_services, L"[DelayHook] Monitor thread completed for PID %lu", params->processId);
+	return 0;
+}
+
+void HookProcDlg::ApplyPendingHooks(DWORD pid, const std::wstring& moduleName)
+{
+	PendingHookKey key{pid, moduleName};
+	auto it = m_PendingHooks.find(key);
+	if (it == m_PendingHooks.end() || it->second.empty()) {
+		LOG_UI(m_services, L"[DelayHook] No pending hooks for PID %u, module %s", pid, moduleName.c_str());
+		return;
+	}
+    
+	std::vector<PendingHook>& hooks = it->second;
+	LOG_UI(m_services, L"[DelayHook] Applying %zu pending hooks", hooks.size());
+    
+	// Apply each hook
+	for (auto& hook : hooks) {
+		if (!ApplySinglePendingHook(hook)) {
+			LOG_UI(m_services, L"[DelayHook] Failed to apply hook for %s!%s", 
+				   hook.dllPath.c_str(), hook.exportName.c_str());
+			// Continue with other hooks even if one fails
+		}
+	}
+    
+	// Remove applied hooks
+	m_PendingHooks.erase(it);
+}
+
+bool HookProcDlg::ApplySinglePendingHook(const PendingHook& hook)
+{
+	LOG_UI(m_services, L"[DelayHook] Applying hook: %s!%s -> %s@%s", 
+		   hook.dllPath.c_str(), hook.exportName.c_str(),
+		   hook.module.c_str(), hook.offset.c_str());
+    
+	// Step 1: Resolve module base address
+	DWORD64 moduleBase = 0;
+	if (!m_services->GetModuleBase(hook.pid, hook.module.c_str(), &moduleBase) || moduleBase == 0) {
+		LOG_UI(m_services, L"[DelayHook] Failed to get module base for %s", hook.module.c_str());
+		return false;
+	}
+    
+	// Step 2: Parse offset string to DWORD
+	bool ok = false;
+	DWORD64 offset = ParseAddressText(hook.offset, ok);
+	if (!ok) {
+		LOG_UI(m_services, L"[DelayHook] Invalid offset format: %s", hook.offset.c_str());
+		return false;
+	}
+    
+	// Step 3: Validate export in hook DLL
+	DWORD hookCodeOffset = 0;
+	CT2A exportNameA(hook.exportName.c_str());
+	if (!m_services->CheckExportFromFile(hook.dllPath.c_str(), exportNameA, &hookCodeOffset)) {
+		LOG_UI(m_services, L"[DelayHook] Export validation failed: %s from %s", 
+			   hook.exportName.c_str(), hook.dllPath.c_str());
+		return false;
+	}
+    
+	// Step 4: Inject trampoline DLL
+	if (!m_services->InjectTrampoline(hook.pid, hook.dllPath.c_str())) {
+		LOG_UI(m_services, L"[DelayHook] Failed to inject trampoline: %s", hook.dllPath.c_str());
+		return false;
+	}
+    
+	// Step 5: Wait for hook DLL to load (poll with timeout)
+	DWORD64 hookDllBase = 0;
+	int retries = 50; // 5 seconds max
+	while (retries-- > 0) {
+		if (m_services->GetModuleBase(hook.pid, hook.dllPath.c_str(), &hookDllBase) && hookDllBase != 0) {
+			break;
+		}
+		Sleep(100);
+	}
+    
+	if (hookDllBase == 0) {
+		LOG_UI(m_services, L"[DelayHook] Timeout waiting for hook DLL to load: %s", hook.dllPath.c_str());
+		return false;
+	}
+    
+	// Step 6: Calculate target and hook function addresses
+	DWORD64 targetAddress = moduleBase + offset;
+	DWORD64 hookFunctionAddress = hookDllBase + hookCodeOffset;
+    
+	// Step 7: Allocate hook ID from bitfield
+	int hookId = -1;
+	for (int i = 0; i < 4; ++i) {
+		LONG64 mask = m_exp_num_tracker_bitfield[i];
+		if (mask != ~0ULL) { // Not all bits set
+			for (int bit = 0; bit < 64; ++bit) {
+				if (!_bittest((LONG*)&m_exp_num_tracker_bitfield[i], bit)) {
+					_bittestandset((LONG*)&m_exp_num_tracker_bitfield[i], bit);
+					hookId = i * 64 + bit;
+					break;
+				}
+			}
+			if (hookId != -1) break;
+		}
+	}
+    
+	if (hookId == -1) {
+		LOG_UI(m_services, L"[DelayHook] No available hook IDs (all 256 slots used)");
+		return false;
+	}
+    
+	// Step 8: Apply the hook using HookCore
+	DWORD ori_asm_code_len = 0;
+	PVOID trampoline_pit = nullptr;
+	PVOID ori_asm_code_addr = nullptr;
+	if (!HookCore::ApplyHook(hook.pid, targetAddress, m_services, hookFunctionAddress, hookId, &ori_asm_code_len, &trampoline_pit, &ori_asm_code_addr)) {
+		LOG_UI(m_services, L"[DelayHook] HookCore::ApplyHook failed at 0x%p", (void*)targetAddress);
+		// Release hook ID
+		_bittestandreset((LONG*)&m_exp_num_tracker_bitfield[hookId / 64], hookId % 64);
+		return false;
+	}
+    
+	// Step 9: Update UI - add hook entry to list
+	HookRow* hr = new HookRow;
+	hr->id = hookId;
+	hr->address = targetAddress;
+	hr->module = hook.module;
+	hr->expFunc = hook.exportName;
+	hr->ori_asm_code_len = ori_asm_code_len;
+	hr->ori_asm_code_addr = (unsigned long long)ori_asm_code_addr;
+	hr->trampoline_pit = (unsigned long long)trampoline_pit;
+    
+	// Add to UI list control
+	CString idStr; idStr.Format(L"%d", hookId);
+	CString addrStr; addrStr.Format(L"0x%016llX", targetAddress);
+	int iRow = m_HookList.InsertItem(m_HookList.GetItemCount(), idStr);
+	m_HookList.SetItemText(iRow, 1, addrStr);
+	m_HookList.SetItemText(iRow, 2, hook.module.c_str());
+	m_HookList.SetItemText(iRow, 3, hr->expFunc.c_str());
+	m_HookList.SetItemData(iRow, (DWORD_PTR)hr);
+    
+	// Step 10: Persist to registry
+	HANDLE hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, hook.pid);
+	if (hProc) {
+		FILETIME createTime{0,0}, exitTime, kernelTime, userTime;
+		if (GetProcessTimes(hProc, &createTime, &exitTime, &kernelTime, &userTime)) {
+			m_services->SaveProcHookList(hook.pid, createTime.dwHighDateTime, createTime.dwLowDateTime, { *hr });
+		}
+		CloseHandle(hProc);
+	}
+    
+	LOG_UI(m_services, L"[DelayHook] Successfully applied delayed hook #%d at 0x%p", hookId, (void*)targetAddress);
+	return true;
+}
+
 ULONGLONG HookProcDlg::ParseAddressText(const std::wstring& input, bool& ok) const {
 	ok = false; if (input.empty()) return 0ULL; std::wstring t = input; for (auto &c : t) c = towlower(c);
 	// allow optional 0x prefix
@@ -1060,7 +1283,7 @@ void HookProcDlg::OnBnClickedApplyHook() {
 			
 			if (result == IDYES) {
 				// Register module watch
-				m_services->RegisterModuleWatch(m_pid, modName.c_str());
+				m_DllLoadMonMgr.RegisterModuleWatch(m_pid, modName.c_str());
 				
 				// Store pending hook with module+offset format
 				ULONGLONG offVal = 0ULL; bool offOk = true;

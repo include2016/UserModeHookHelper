@@ -7,12 +7,13 @@
 #include <string>
 #include <algorithm>
 #include <tlhelp32.h>
-#include "FilterCommPort.h"
 #include <unordered_map>
 #include <thread>
 #include <unordered_set>
-#include "ProcessManager.h"
 #include <functional>
+#include <map>
+#include "FilterCommPort.h"
+#include "ProcessManager.h"
 #include "../../Shared/HookServices.h"
 
 // CUMControllerDlg dialog
@@ -81,8 +82,9 @@ public:
 	// Removed obsolete OnTimer; enumeration-only mode no longer uses it.
 	afx_msg void OnToggleGlobalHookMode();
 	afx_msg LRESULT OnApplyGlobalHookMenu(WPARAM wParam, LPARAM lParam);
-    
-private: 
+
+private:
+	
 	Filter m_Filter;
 	CListCtrl m_ProcListCtrl;
 	std::wstring m_CurrentFilterString;
@@ -94,6 +96,8 @@ private:
 	typedef BOOL (WINAPI *PFN_ShowHookDialog)(HWND, DWORD, const wchar_t*, struct IHookServices*);
 	PFN_ShowHookDialog m_pfnShowHookDialog = nullptr; // resolved factory
 	bool CheckHookList(const std::wstring& imagePath);
+	// Open HookProcDlg for the specified process - all hook operations go through this dialog
+	void OpenHookProcDlg(DWORD pid);
     afx_msg LRESULT OnFatalMessage(WPARAM wParam, LPARAM lParam);
 	// Periodic rescan state
 	HANDLE m_RescanEvent = NULL;
@@ -151,23 +155,6 @@ private:
 	std::unordered_set<unsigned long long> m_PplElevatedSet;
 	std::unordered_set<unsigned long long> m_PplUnprotectedSet;
 
-	// Pending hooks for delayed hooking (module not yet loaded)
-	// Key: PID + module name, Value: list of pending hooks
-public:
-	struct PendingHookKey {
-		DWORD pid;
-		std::wstring moduleName;
-		bool operator==(const PendingHookKey& other) const {
-			return pid == other.pid && moduleName == other.moduleName;
-		}
-	};
-	struct PendingHookKeyHash {
-		size_t operator()(const PendingHookKey& k) const noexcept {
-			return std::hash<DWORD>()(k.pid) ^ std::hash<std::wstring>()(k.moduleName);
-		}
-	};
-	std::unordered_map<PendingHookKey, std::vector<PendingHook>, PendingHookKeyHash> m_PendingHooks;
-
 private:
 	CMenu m_PluginsSubMenu; // submenu showing discovered plugins
 	std::unordered_map<int, std::wstring> m_PluginMap; // cmd id -> dll full path
@@ -183,5 +170,4 @@ private:
 	void FinishStartupIfDone(); // persistence only (no UI)
 	void CompleteStartupUI(); // UI enable/hide after enumeration completes
 	LRESULT OnPostEnumCleanup(WPARAM, LPARAM);
-	// Inline resolution now performed in LoadProcessList.
 };

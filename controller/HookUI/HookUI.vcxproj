@@ -66,6 +66,7 @@
   </ImportGroup>
   <ItemGroup>
     <ClInclude Include="HookUIFactory.h" />
+      <ClInclude Include="DllLoadMonManager.h" />
     <ClInclude Include="HookProcDlg.h" />
     <ClInclude Include="HookInterfaces.h" />
     <ClInclude Include="HookUIResource.h" />
@@ -73,6 +74,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="HookUIFactory.cpp" />
+      <ClCompile Include="DllLoadMonManager.cpp" />
     <ClCompile Include="HookProcDlg.cpp" />
   </ItemGroup>
   <ItemGroup>

@@ -11,20 +11,26 @@
 #else
 #define DLLLOADMON_API extern "C" __declspec(dllimport)
 #endif
-
+#define MAX_WATCHED_MODULES 0x100
+#define MAX_MODULE_NAME_LEN MAX_PATH
 // Shared data structure for communication between UMController and DllLoadMon hook
-// This structure is allocated in the target process by UMController
-struct DllLoadMonSharedData {
-    HANDLE hLoadEvent;          // Load notification event (DllLoadMon -> UMController)
-    HANDLE hReleaseEvent;       // Release wait event (UMController -> DllLoadMon)
-    WCHAR* pModuleBaseList;     // Array of module base addresses being watched
-    CHAR* pModuleNameList;      // Array of module names (without .dll extension)
-    DWORD dwWatchCount;         // Number of modules in watch list
-    SRWLOCK WatchListLock;      // SRW lock for thread-safe access to watch list
-};
+// This structure is stored in a memory-mapped file (not target process memory)
+// Maximum 256 DLL names, each up to 256 WCHARs (no .dll extension)
+#pragma once
+
+#include <Windows.h>
+#include "../../Shared/DllLoadMonShared.h"
+
+#ifdef DLLLOADMON_EXPORTS
+#define DLLLOADMON_API extern "C" __declspec(dllexport)
+#else
+#define DLLLOADMON_API extern "C" __declspec(dllimport)
+#endif
+
 
 // Hook callback function type definition
-// Parameters passed by UMController during injection
+// Parameters: RCX=ModuleBase, RDX/R8/R9 unused, RSP=stack pointer for PROLOG
+// In LdrLoadDll return context: RDI points to PUNICODE_STRING of DLL name
 typedef void (*PFN_DllLoadMonHook)(
     PVOID ModuleBase,      // Base address of the module being loaded (RDI points here)
     HANDLE hEventLoad,     // Load notification event (DllLoadMon -> UMController)
@@ -32,20 +38,44 @@ typedef void (*PFN_DllLoadMonHook)(
     PVOID WatchList        // Watch list (shared memory or global variable)
 );
 
-// Export function: Provides hook logic code
-// This is the ONLY function UMController needs to call via GetProcAddress
+// Export function: Provides hook logic code for X64
+// Called at LdrLoadDll return address with RDI pointing to PUNICODE_STRING
 DLLLOADMON_API
-void DllLoadMonHook(
-    PVOID ModuleBase,
-    HANDLE hEventLoad,
-    HANDLE hEventRelease,
-    PVOID WatchList
+VOID DllLoadMonHook_X64(PVOID rcx, PVOID rdx, PVOID r8, PVOID r9, PVOID rsp);
+
+// Export function: Provides hook logic code for Win32
+// Called at LdrLoadDll return address with EDI pointing to PUNICODE_STRING
+DLLLOADMON_API
+VOID DllLoadMonHook_Win32(ULONG esp);
+
+
+
+// UMController helper functions for managing watch list via memory-mapped file
+// These functions are called by UMController to set up the shared data
+
+/**
+ * Create memory-mapped file and populate watch list
+ * Called by UMController before injecting DllLoadMon
+ * 
+ * @param pid Target process ID
+ * @param moduleNames List of DLL names to watch (without .dll extension)
+ * @param phFileMapping Output: handle to file mapping object (must be kept open)
+ * @param ppSharedData Output: pointer to shared data (optional, can be NULL)
+ * @return TRUE on success, FALSE on failure
+ */
+DLLLOADMON_API
+BOOL DllLoadMon_CreateWatchList(
+    DWORD pid,
+    const std::vector<std::wstring>& moduleNames,
+    HANDLE* phFileMapping,
+    DllLoadMonSharedData** ppSharedData
 );
 
-// Optional initialization function (if global state setup is needed)
-// May be used to initialize shared memory or global variables
+/**
+ * Cleanup memory-mapped file resources
+ * Called by UMController when watch is no longer needed
+ * 
+ * @param hFileMapping File mapping handle to close
+ */
 DLLLOADMON_API
-NTSTATUS DllLoadMon_Initialize(
-    HANDLE hEventLoad,
-    HANDLE hEventRelease
-);
+VOID DllLoadMon_CleanupWatchList(HANDLE hFileMapping);

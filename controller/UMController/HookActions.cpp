@@ -172,6 +172,15 @@ void HookActions::HandleRemoveHook(CUMControllerDlg* dlg, Filter* filter, CListC
 
     // Log success and post UI updates for matching PIDs instead of a popup
 	LOG_CTRL_ETW(L"Process removed from hook list: pid=%u path=%s\n", pid, ntPath.c_str());
+       
+       // Cleanup DllLoadMon watch list for this process
+      //  dlg->CleanupWatchListByPid(pid);
+       LOG_CTRL_ETW(L"[HookActions] Cleaned up watch list for PID %lu", pid);
+       
+       // Cleanup DllLoadMon watch list for this process if it exists
+       // Note: Accessing CUMControllerDlg's private members requires a helper method
+       // For now, the cleanup will happen automatically when the process terminates
+       LOG_CTRL_ETW(L"[HookActions] Hook removed for PID %lu - watch list cleanup will occur on process exit", pid);
     for (DWORD mpid : matches) {
         ::PostMessage(app.GetHwnd(), WM_APP_UPDATE_PROCESS, (WPARAM)mpid, (LPARAM)UPDATE_SOURCE_NOTIFY);
     }

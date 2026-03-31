@@ -10,7 +10,6 @@
 #include "ProcFlags.h"
 
 #include "UIHelpers.h"
-#include "HookActions.h"
 #include "ProcessResolver.h"
 #include "afxdialogex.h"
 #include "ETW.h"
@@ -32,9 +31,9 @@
 #include "../ProcessHackerLib/phlib_expose.h"
 #include "../HookCoreLib/HookCore.h"
 
-// DllLoadMon types
-#include "../hook_component/DllLoadMon/DllLoadMon.h"
+#include "../../Shared/DllLoadMonShared.h"
 #include "LdrLoadDllOffsets.h"
+#include "HookActions.h"
 
 #ifdef _DEBUG
 #define new DEBUG_NEW
@@ -84,8 +83,6 @@ void CAboutDlg::OnSiteLink(NMHDR* pNMHDR, LRESULT* pResult) {
 	ShellExecuteW(NULL, L"open", L"http://144.34.164.217", NULL, NULL, SW_SHOWNORMAL);
 	*pResult = 0;
 }
-
-
 // CUMControllerDlg dialog
 
 
@@ -373,9 +370,9 @@ END_MESSAGE_MAP()
 class HookServicesAdapter : public HookServicesBase {
 public:
 	HookServicesAdapter() : m_pDlg(nullptr) {}
-	
+
 	void SetDialog(CUMControllerDlg* pDlg) { m_pDlg = pDlg; }
-	
+
 	BOOLEAN ReadPrimitive(_In_ LPVOID target_addr, _Out_ LPVOID buffer, _In_ size_t size) override {
 		return Helper::ReadPrimitive(target_addr, buffer, size);
 	}
@@ -400,7 +397,7 @@ public:
 	}
 	bool CheckPeArch(const wchar_t* dllPath, bool& is64) override {
 		return Helper::IsPeFile64(dllPath, is64);
-	} 
+	}
 	void LogPhlib(const wchar_t* fmt, ...) override {
 		wchar_t buffer[1024];
 		va_list ap; va_start(ap, fmt);
@@ -425,7 +422,7 @@ public:
 	bool CheckExportFromFile(const wchar_t* dllPath, const char* exportName, DWORD* out_func_offset) override {
 		return Helper::CheckExportFromFile(dllPath, exportName, out_func_offset);
 	}
-	bool GetModuleBase(DWORD pid,const wchar_t* target_module, DWORD64* base) override
+	bool GetModuleBase(DWORD pid, const wchar_t* target_module, DWORD64* base) override
 	{
 		return Helper::GetModuleBase(pid, target_module, base);
 	}
@@ -458,25 +455,25 @@ public:
 		}
 		return RegistryStore::WriteProcHookListRows(pid, hi, lo, ptrs);
 	}
-	 bool ForceInject(DWORD pid) override {
+	bool ForceInject(DWORD pid) override {
 		return  Helper::ForceInject(pid);
 	}
-	 virtual bool ConvertWcharToChar(const wchar_t* src, char *dst, size_t dstChars) override {
-		 return Helper::ConvertWcharToChar(src, dst, dstChars);
-	 }
-	  bool ConvertCharToWchar(const char* src, wchar_t* dst, size_t dstChars) override {
-		  return Helper::ConvertCharToWchar(src, dst, dstChars);
+	virtual bool ConvertWcharToChar(const wchar_t* src, char *dst, size_t dstChars) override {
+		return Helper::ConvertWcharToChar(src, dst, dstChars);
 	}
-	   void* PhBuildModuleListWow64(void* hProc, void* head) override{
-		   return PHLIB::PhBuildModuleList(hProc, head);
-	  }
-	 std::wstring GetCurrentDirFilePath(WCHAR* filename) override {
+	bool ConvertCharToWchar(const char* src, wchar_t* dst, size_t dstChars) override {
+		return Helper::ConvertCharToWchar(src, dst, dstChars);
+	}
+	void* PhBuildModuleListWow64(void* hProc, void* head) override {
+		return PHLIB::PhBuildModuleList(hProc, head);
+	}
+	std::wstring GetCurrentDirFilePath(WCHAR* filename) override {
 		auto s = Helper::GetCurrentDirFilePath(filename);
 		return s;
 	}
-	 bool GetHighAccessProcHandle(DWORD pid, HANDLE* hProc) override{
+	bool GetHighAccessProcHandle(DWORD pid, HANDLE* hProc) override {
 		Filter* f = Helper::GetFilterInstance();
-		if (f){
+		if (f) {
 			if (!f->FLTCOMM_GetProcessHandle(pid, hProc)) {
 				LOG_CTRL_ETW(L"failed to call FLTCOMM_GetProcessHandle\n");
 				return false;
@@ -491,196 +488,30 @@ public:
 	bool RemoveProcHookList(DWORD pid, DWORD filetimeHi, DWORD filetimeLo) override {
 		return RegistryStore::RemoveProcHookList(pid, filetimeHi, filetimeLo);
 	}
-	 bool LoadProcHookList(DWORD pid, DWORD filetimeHi, DWORD filetimeLo, std::vector<HookRow>& outEntries) override {
+	bool LoadProcHookList(DWORD pid, DWORD filetimeHi, DWORD filetimeLo, std::vector<HookRow>& outEntries) override {
 		// Use stable HookRow-based reader which fills expFunc when present
 		return RegistryStore::ReadProcHookListRows(pid, filetimeHi, filetimeLo, outEntries);
 	}
-	 bool WriteProcessMemoryWrap(
-		 _In_ HANDLE hProcess,
-		 _In_ LPVOID lpBaseAddress,
-		 _In_reads_bytes_(nSize) LPCVOID lpBuffer,
-		 _In_ SIZE_T nSize,
-		 _Out_opt_ SIZE_T * lpNumberOfBytesWritten
-	 ) override {
+	DWORD64 CalculateNtdllLdrLoadDllRetOffset(DWORD processId, bool is64Bit) override {
+		// Delegate to the LdrLoadDllOffsets module which has MD5-based lookup table
+		return ::CalculateNtdllLdrLoadDllRetOffset(processId, is64Bit);
+	}
+	bool WriteProcessMemoryWrap(
+		_In_ HANDLE hProcess,
+		_In_ LPVOID lpBaseAddress,
+		_In_reads_bytes_(nSize) LPCVOID lpBuffer,
+		_In_ SIZE_T nSize,
+		_Out_opt_ SIZE_T * lpNumberOfBytesWritten
+	) override {
 
-		 return Helper::WriteProcessMemoryWrap(hProcess, lpBaseAddress, lpBuffer, nSize, lpNumberOfBytesWritten) ? TRUE : FALSE;
+		return Helper::WriteProcessMemoryWrap(hProcess, lpBaseAddress, lpBuffer, nSize, lpNumberOfBytesWritten) ? TRUE : FALSE;
 
-	 }
-	 bool RegisterModuleWatch(DWORD pid, const wchar_t* moduleName) override {
-		 Filter* f = Helper::GetFilterInstance();
-		 if (!f) return false;
-		 return f->FLTCOMM_RegisterModuleWatch(pid, moduleName);
-	 }
-	 bool RegisterModuleWatch(DWORD pid, const wchar_t* moduleName) override {
-		 // Rev6 Implementation: Calculate MD5, load DllLoadMon.dll, inject via ApplyHook
-		 LOG_CTRL_ETW(L"[UMCtrl] RegisterModuleWatch: PID=%lu, Module=%s", pid, moduleName);
-		 
-		 // 1. Determine process architecture
-		 bool is64Bit = false;
-		 if (!Helper::IsProcess64(pid, is64Bit)) {
-			 LOG_CTRL_ETW(L"[UMCtrl] Failed to determine process architecture for PID %lu", pid);
-			 return false;
-		 }
-		 
-		 // 2. Calculate ntdll MD5 and get LdrLoadDll return offset
-		 DWORD64 ldrLoadDllRetOffset = CalculateNtdllLdrLoadDllRetOffset(pid, is64Bit);
-		 if (ldrLoadDllRetOffset == 0) {
-			 LOG_CTRL_ETW(L"[UMCtrl] Failed to get LdrLoadDll return offset for PID %lu", pid);
-			 return false;
-		 }
-		 LOG_CTRL_ETW(L"[UMCtrl] LdrLoadDll return offset: 0x%llX", ldrLoadDllRetOffset);
-		 
-		 // 3. Get ntdll base address in target process
-		 DWORD64 ntdllBase = 0;
-		 if (!Helper::GetModuleBase(pid, L"ntdll.dll", &ntdllBase)) {
-			 LOG_CTRL_ETW(L"[UMCtrl] Failed to get ntdll base for PID %lu", pid);
-			 return false;
-		 }
-		 
-		 // 4. Calculate actual LdrLoadDll return address
-		 ULONGLONG ldrLoadDllRetAddress = ntdllBase + ldrLoadDllRetOffset;
-		 LOG_CTRL_ETW(L"[UMCtrl] LdrLoadDll return address: 0x%p", (PVOID)ldrLoadDllRetAddress);
-		 
-		 // 5. Load DllLoadMon.dll and get DllLoadMonHook address
-		 HMODULE hDllLoadMon = LoadLibraryW(L"DllLoadMon.dll");
-		 if (!hDllLoadMon) {
-			 LOG_CTRL_ETW(L"[UMCtrl] Failed to load DllLoadMon.dll: %lu", GetLastError());
-			 return false;
-		 }
-		 
-		 PFN_DllLoadMonHook pfnDllLoadMonHook = (PFN_DllLoadMonHook)GetProcAddress(hDllLoadMon, "DllLoadMonHook");
-		 if (!pfnDllLoadMonHook) {
-			 LOG_CTRL_ETW(L"[UMCtrl] Failed to get DllLoadMonHook address: %lu", GetLastError());
-			 FreeLibrary(hDllLoadMon);
-			 return false;
-		 }
-		 LOG_CTRL_ETW(L"[UMCtrl] DllLoadMonHook address: %p", (PVOID)pfnDllLoadMonHook);
-		 
-		 // 6. Open target process
-		 HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
-		 if (!hProcess) {
-			 LOG_CTRL_ETW(L"[UMCtrl] Failed to open process %lu: %lu", pid, GetLastError());
-			 FreeLibrary(hDllLoadMon);
-			 return false;
-		 }
-		 
-		 // 7. Create event handles (will be duplicated to target process)
-		 WCHAR loadEventName[64], releaseEventName[64];
-		 swprintf_s(loadEventName, L"Global\\DelayHook_Load_%lu", pid);
-		 swprintf_s(releaseEventName, L"Global\\DelayHook_Release_%lu", pid);
-		 
-		 HANDLE hEventLoad = CreateEventW(NULL, FALSE, FALSE, loadEventName);
-		 HANDLE hEventRelease = CreateEventW(NULL, FALSE, FALSE, releaseEventName);
-		 
-		 if (!hEventLoad || !hEventRelease) {
-			 LOG_CTRL_ETW(L"[UMCtrl] Failed to create events: %lu", GetLastError());
-			 CloseHandle(hProcess);
-			 FreeLibrary(hDllLoadMon);
-			 return false;
-		 }
-		 
-		 // 8. Allocate shared memory in target process for DllLoadMonSharedData
-		 SIZE_T sharedDataSize = sizeof(DllLoadMonSharedData);
-		 PVOID pSharedData = VirtualAllocEx(hProcess, NULL, sharedDataSize, 
-											MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-		 if (!pSharedData) {
-			 LOG_CTRL_ETW(L"[UMCtrl] Failed to allocate shared memory: %lu", GetLastError());
-			 CloseHandle(hEventRelease);
-			 CloseHandle(hEventLoad);
-			 CloseHandle(hProcess);
-			 FreeLibrary(hDllLoadMon);
-			 return false;
-		 }
-		 
-		 // 9. Prepare shared data structure
-		 DllLoadMonSharedData sharedData = {0};
-		 sharedData.hLoadEvent = hEventLoad;  // Will be duplicated by hook code
-		 sharedData.hReleaseEvent = hEventRelease;
-		 sharedData.pModuleBaseList = nullptr;  // Will be allocated by hook code
-		 sharedData.pModuleNameList = nullptr;
-		 sharedData.dwWatchCount = 1;
-		 InitializeSRWLock(&sharedData.WatchListLock);
-		 
-		 // 10. Write shared data to target process
-		 if (!Helper::WriteProcessMemoryWrap(hProcess, pSharedData, &sharedData, sharedDataSize, NULL)) {
-			 LOG_CTRL_ETW(L"[UMCtrl] Failed to write shared data: %lu", GetLastError());
-			 VirtualFreeEx(hProcess, pSharedData, 0, MEM_RELEASE);
-			 CloseHandle(hEventRelease);
-			 CloseHandle(hEventLoad);
-			 CloseHandle(hProcess);
-			 FreeLibrary(hDllLoadMon);
-			 return false;
-		 }
-		 
-		 // 11. Call HookCore::ApplyHook to inject DllLoadMonHook
-		 DWORD originalAsmLen = 0;
-		 PVOID trampolinePit = nullptr;
-		 PVOID originalAsmAddr = nullptr;
-		 
-		 bool result = HookCore::ApplyHook(
-			 pid,
-			 ldrLoadDllRetAddress,
-			 &g_HookServices,
-			 (DWORD64)pfnDllLoadMonHook,
-			 -1,  // Hook ID (-1 for internal)
-			 &originalAsmLen,
-			 &trampolinePit,
-			 &originalAsmAddr
-		 );
-		 
-		 if (!result) {
-			 LOG_CTRL_ETW(L"[UMCtrl] ApplyHook failed for PID %lu", pid);
-			 VirtualFreeEx(hProcess, pSharedData, 0, MEM_RELEASE);
-			 CloseHandle(hEventRelease);
-			 CloseHandle(hEventLoad);
-			 CloseHandle(hProcess);
-			 FreeLibrary(hDllLoadMon);
-			 return false;
-		 }
-		 
-		 LOG_CTRL_ETW(L"[UMCtrl] Successfully registered module watch for PID %lu, module %s", pid, moduleName);
-		 
-		 // Note: Event handles will be used by the hook code in target process
-		 // They will be closed when the process terminates
-		 
-		 FreeLibrary(hDllLoadMon);
-		 CloseHandle(hProcess);
-		 // Note: Don't close event handles - they're used by the hook code
-		 
-		 return true;
-	 }
-	 
-	 void RegisterModuleLoadCallback(ModuleLoadCallback callback, void* context) override {
-		 Filter* f = Helper::GetFilterInstance();
-		 if (!f) return;
-		 f->RegisterModuleLoadCallback(callback, context);
-	 }
-	 void AddPendingHook(const PendingHook& hook) override {
-		 if (!m_pDlg) return;
-		 CUMControllerDlg::PendingHookKey key{ hook.pid, hook.module };
-		 m_pDlg->m_PendingHooks[key].push_back(hook);
-		 LOG_CTRL_ETW(L"Added pending hook for PID %u, module %s, offset %s\n", hook.pid, hook.module.c_str(), hook.offset.c_str());
-	 }
-	 std::vector<PendingHook> GetPendingHooks(DWORD pid, const wchar_t* moduleName) override {
-		 if (!m_pDlg) return {};
-		 CUMControllerDlg::PendingHookKey key{ pid, moduleName };
-		 auto it = m_pDlg->m_PendingHooks.find(key);
-		 if (it != m_pDlg->m_PendingHooks.end()) {
-			 return it->second;
-		 }
-		 return {};
-	 }
-	 void RemovePendingHooks(DWORD pid, const wchar_t* moduleName) override {
-		 if (!m_pDlg) return;
-		 CUMControllerDlg::PendingHookKey key{ pid, moduleName };
-		 m_pDlg->m_PendingHooks.erase(key);
-		 LOG_CTRL_ETW(L"Removed pending hooks for PID %u, module %s\n", pid, moduleName);
-	 }
+	}
+	
 private:
 	CUMControllerDlg* m_pDlg; // Direct dialog pointer (set via SetDialog)
 };
 static HookServicesAdapter g_HookServices; // singleton adapter instance
-
 // Plugin export prototype: receives HWND and IHookServices pointer
 typedef void(__cdecl *PFN_PluginMain)(HWND hwnd, IHookServices* services);
 
@@ -824,7 +655,6 @@ BOOL CUMControllerDlg::OnInitDialog()
 {
 	CDialogEx::OnInitDialog();
 	app.SetHwnd(this->GetSafeHwnd());
-	g_HookServices.SetDialog(this); // Set dialog pointer for service adapter
 
 
 
@@ -1092,29 +922,6 @@ BOOL CUMControllerDlg::OnInitDialog()
 		}
 	}, this->GetSafeHwnd());
 
-	// Register module load notification callback for delayed hook support
-	m_Filter.RegisterModuleLoadCallback([](DWORD pid, const wchar_t* moduleName, const wchar_t* fullPath, ULONGLONG base, void* ctx) {
-		HWND hwnd = NULL;
-		if (ctx) hwnd = (HWND)ctx;
-		if (hwnd) {
-			// Post a message to apply delayed hooks for the loaded module
-			// Allocate a structure to pass module info
-			struct ModuleLoadInfo {
-				DWORD pid;
-				WCHAR moduleName[260];
-				WCHAR fullPath[520];
-				ULONGLONG base;
-			};
-			ModuleLoadInfo* info = new ModuleLoadInfo();
-			info->pid = pid;
-			wcscpy_s(info->moduleName, moduleName);
-			wcscpy_s(info->fullPath, fullPath);
-			info->base = base;
-			
-			::PostMessage(hwnd, WM_APP_MODULE_LOADED, (WPARAM)info, 0);
-		}
-	}, this->GetSafeHwnd());
-
 	// Start the asynchronous listener now that the initial list is populated
 	m_Filter.StartListener();
 	// Provide Helper with pointer to our Filter instance so it may query
@@ -1300,7 +1107,7 @@ void CUMControllerDlg::OnRemoveHook() {
 	if (nItem == -1) return;
 	PROC_ITEMDATA packed = (PROC_ITEMDATA)m_ProcListCtrl.GetItemData(nItem);
 	DWORD pid = PID_FROM_ITEMDATA(packed);
-	HookActions::HandleRemoveHook(this, &m_Filter, &m_ProcListCtrl, nItem, pid);
+	HookActions::HandleAddHook(this, &m_Filter, &m_ProcListCtrl, nItem, pid);
 }
 void CUMControllerDlg::OnInjectDll() {
 	int nItem = m_ProcListCtrl.GetNextItem(-1, LVNI_SELECTED);
@@ -1906,6 +1713,7 @@ LRESULT CUMControllerDlg::OnUpdateProcess(WPARAM wParam, LPARAM lParam) {
 		return 0;
 	}
 }
+
 void CUMControllerDlg::OnHelpAbout()
 {
 	CAboutDlg dlgAbout;
@@ -2661,9 +2469,9 @@ LRESULT CUMControllerDlg::OnPostEnumCleanup(WPARAM, LPARAM) {
 		// Enumeration-only: ignore startup sets removal.
 	}
 	// No progress recompute needed.
+
 	return 0;
 }
-
 // Removed OnTimer; no timeout logic for enumeration-only progress.
 
 void CUMControllerDlg::OnRemoveExecutablesFromHookList() {
@@ -2850,99 +2658,8 @@ LRESULT CUMControllerDlg::OnModuleLoaded(WPARAM wParam, LPARAM lParam) {
 	LOG_CTRL_ETW(L"Module loaded notification: PID %u, Module %s, Base 0x%p\n", 
 		info->pid, info->moduleName, (PVOID)info->base);
 	
-	// Extract just the filename from the full module name
-	std::wstring moduleName = info->moduleName;
-	size_t pos = moduleName.find_last_of(L"\\/");
-	if (pos != std::wstring::npos) {
-		moduleName = moduleName.substr(pos + 1);
-	}
-	
-	// Check if there are any pending hooks for this module
-	std::vector<PendingHook> pending = g_HookServices.GetPendingHooks(info->pid, moduleName.c_str());
-	if (!pending.empty()) {
-		LOG_CTRL_ETW(L"Found %zu pending hooks for PID %u, module %s. Applying now...\n", 
-			pending.size(), info->pid, moduleName.c_str());
-		
-		// Apply each pending hook
-		for (const auto& hook : pending) {
-			// Calculate the actual address: module base + offset
-			ULONGLONG offset = 0;
-			try {
-				offset = std::stoull(hook.offset, nullptr, 0);
-			} catch (...) {
-				LOG_CTRL_ETW(L"Failed to parse offset %s for pending hook\n", hook.offset.c_str());
-				continue;
-			}
-			
-			ULONGLONG targetAddress = info->base + offset;
-			
-			// Get hook code DLL base and offset
-			ULONGLONG hookCodeBase = 0;
-			if (!g_HookServices.GetModuleBase(info->pid, hook.dllPath.c_str(), &hookCodeBase)) {
-				LOG_CTRL_ETW(L"Failed to get hook code DLL base for %s\n", hook.dllPath.c_str());
-				continue;
-			}
-			
-			// Resolve hook code export offset
-			DWORD hookCodeOffset = 0;
-			// Convert wide string export name to narrow string for CheckExportFromFile
-			CT2A exportNameA(hook.exportName.c_str());
-			if (!g_HookServices.CheckExportFromFile(hook.dllPath.c_str(), exportNameA, &hookCodeOffset)) {
-				LOG_CTRL_ETW(L"Failed to resolve export %s from %s\n", hook.exportName.c_str(), hook.dllPath.c_str());
-				continue;
-			}
-			
-			ULONGLONG hookCodeAddress = hookCodeBase + hookCodeOffset;
-			
-			// Apply the hook using HookCore
-			// Find an available hook ID
-			int assignedHookId = -1;
-			for (int i = 0; i < TRAMPOLINE_EXP_NUM_MAX; i++) {
-				if (!_bittest((LONG*)&hook.hookRow.id, i)) {
-					assignedHookId = i;
-					break;
-				}
-			}
-			
-			if (assignedHookId == -1) {
-				LOG_CTRL_ETW(L"No available hook IDs for delayed hook\n");
-				continue;
-			}
-			
-			// Apply the hook
-			ULONGLONG trampolineAddr = 0;
-			ULONGLONG origCodeAddr = 0;
-			DWORD origCodeLen = 0;
-			
-			bool success = HookCore::ApplyHook(
-				info->pid,
-				targetAddress,
-				&g_HookServices,
-				hookCodeAddress,
-				assignedHookId,
-				&origCodeLen,
-				(PVOID*)&trampolineAddr,
-				(PVOID*)&origCodeAddr
-			);
-			
-			if (success) {
-				LOG_CTRL_ETW(L"Successfully applied delayed hook: PID %u, target=0x%llX, hookId=%d\n", 
-					info->pid, targetAddress, assignedHookId);
-					
-				// Update the hook row with the assigned ID
-				// Note: HookRow persistence would happen here if needed
-			} else {
-				LOG_CTRL_ETW(L"Failed to apply delayed hook: PID %u, target=0x%llX\n", 
-					info->pid, targetAddress);
-			}
-		}
-		
-		// Remove applied hooks from pending list
-		g_HookServices.RemovePendingHooks(info->pid, moduleName.c_str());
-		
-		// Update UI to reflect the newly loaded module
-		::PostMessage(m_hWnd, WM_APP_UPDATE_PROCESS, (WPARAM)info->pid, (LPARAM)UPDATE_SOURCE_NOTIFY);
-	}
+	// Note: Delay hook application is now handled by HookUI via DelayHookMonitorThread.
+	// This notification is only logged here for debugging purposes.
 	
 	return 0;
 }

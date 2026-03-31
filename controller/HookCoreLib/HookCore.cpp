@@ -7,7 +7,7 @@
 #include "../Shared/LogMacros.h" 
 #include "Trampoline.h"
 #include "../../Shared/SharedMacroDef.h"
-#include <psapi.h>"
+#include <psapi.h>
 #include "../ProcessHackerLib/phlib_expose.h"
 
 namespace HookCore {

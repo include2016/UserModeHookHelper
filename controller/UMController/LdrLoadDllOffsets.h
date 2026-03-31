@@ -17,16 +17,10 @@ struct LdrLoadDllOffsetEntry {
 // Pre-computed MD5 offsets for common Windows versions
 // x64 versions
 static const LdrLoadDllOffsetEntry g_LdrLoadDllOffsets_x64[] = {
-    // Windows 10 21H2 x64
-    {"a3ae65cd2f9a2f28b9b5d2c0e8a5c3f1", 0x1A2B3, "Windows 10 21H2 x64"},
-    // Windows 10 22H2 x64
-    {"b4bf76de3gab3g39ca6e3d1f9b6d4g2", 0x1A3C7, "Windows 10 22H2 x64"},
-    // Windows 11 21H2 x64
-    {"c5cg87ef4hbc4h4adb7f4e2gac7e5h3", 0x1B1D8, "Windows 11 21H2 x64"},
-    // Windows 11 22H2 x64
-    {"d6dh98fg5icd5i5bec8g5f3hbd8f6i4", 0x1B2E9, "Windows 11 22H2 x64"},
-    // Sentinel/Default (should be updated with real values)
-    {nullptr, 0x0, "Unknown"}
+	// Windows 10 21H2 x64
+	{"35b03f5d9c6da76fec950a36f9d357b3", 0x16B34, "Windows 10 21H2 x64"},
+	// Sentinel/Default (should be updated with real values)
+	{nullptr, 0x0, "Unknown"}
 };
 
 // x86 (WoW64) versions

@@ -291,6 +291,7 @@
     </ResourceCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClInclude Include="LdrLoadDllOffsets.h" />
     <ClInclude Include="RegistryStore.h" />
     <ClInclude Include="RemoveWhitelistDlg.h" />
     <ClInclude Include="RemoveHookDlg.h" />

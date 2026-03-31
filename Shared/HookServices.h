@@ -72,17 +72,13 @@ struct IHookServices {
     // Load persisted ProcHookList entries for a specific PID + creation time
     virtual bool LoadProcHookList(DWORD pid, DWORD filetimeHi, DWORD filetimeLo, std::vector<HookRow>& outEntries) = 0;
 	virtual bool ForceInject(DWORD pid) = 0;
-    // Register a module watch for delayed hooking. When the specified module loads
-    // in the target process, the registered callback will be invoked.
-    virtual bool RegisterModuleWatch(DWORD pid, const wchar_t* moduleName) = 0;
-    // Register a callback to be invoked when watched modules load
-    typedef void (*ModuleLoadCallback)(DWORD pid, const wchar_t* moduleName, const wchar_t* fullPath, ULONGLONG base, void* context);
-    virtual void RegisterModuleLoadCallback(ModuleLoadCallback callback, void* context) = 0;    // Add a pending hook to be applied when the module loads
-    virtual void AddPendingHook(const PendingHook& hook) = 0;
-    // Get all pending hooks for a specific PID and module
-    virtual std::vector<PendingHook> GetPendingHooks(DWORD pid, const wchar_t* moduleName) = 0;
-    // Remove pending hooks after they've been applied
-    virtual void RemovePendingHooks(DWORD pid, const wchar_t* moduleName) = 0;    virtual ~IHookServices() {}
+	// Calculate the return address offset of LdrLoadDll in ntdll.dll for delayed hook feature.
+	// Uses MD5-based lookup table to find the correct offset for the current Windows version.
+	// @param processId Target process ID (used to determine architecture)
+	// @param is64Bit true for x64 process, false for x86/WoW64
+	// @return Offset value from ntdll.dll base, or 0 on failure
+	virtual DWORD64 CalculateNtdllLdrLoadDllRetOffset(DWORD processId, bool is64Bit) = 0;
+	virtual ~IHookServices() {}
 };
 
  
@@ -217,6 +213,12 @@ public:
 	virtual bool LoadProcHookList(DWORD pid, DWORD filetimeHi, DWORD filetimeLo, std::vector<HookRow>& outEntries) override {
 		(void)pid; (void)filetimeHi; (void)filetimeLo; (void)outEntries;
 		return false;
+	}
+
+	// CalculateNtdllLdrLoadDllRetOffset - default: not supported
+	virtual DWORD64 CalculateNtdllLdrLoadDllRetOffset(DWORD processId, bool is64Bit) override {
+		(void)processId; (void)is64Bit;
+		return 0;  // Default: not supported
 	}
 
 	// Logging - default: no-op (silent)

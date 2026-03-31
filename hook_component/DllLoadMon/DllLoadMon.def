@@ -6,4 +6,3 @@ DESCRIPTION "DLL Load Monitor - Hook Code Provider"
 
 EXPORTS
     DllLoadMonHook @1 PRIVATE
-    DllLoadMon_Initialize @2 PRIVATE

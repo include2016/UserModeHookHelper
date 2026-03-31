@@ -1,0 +1,11 @@
+现在我们已经将大部分delayhook特性的代码都移动到了
+hookui中
+
+但是umcontroll还在提供RegisterModuleWatch函数调用
+
+我认为他不应该放在controller中，应该直接放在hookui中
+
+
+直接负责创建共享文件映射和使用dllloadmon.dll对ntdll的ldrloaddll的返回位置的hook
+
+移除controller中的相关代码
