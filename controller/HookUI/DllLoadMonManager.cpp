@@ -4,6 +4,7 @@
 #include "../ProcessHackerLib/phlib_expose.h"
 #include <cstdio>
 #include "../../Shared/LogMacros.h"
+#include "../../Shared/SharedMacroDef.h"
 
 DllLoadMonManager::DllLoadMonManager(IHookServices* services) 
     : m_services(services) {
@@ -188,58 +189,36 @@ bool DllLoadMonManager::InstallLdrLoadDllHook(DWORD pid) {
     ULONGLONG ldrLoadDllRetAddr = ntdllBase + ldrLoadDllRetOffset;
     
  
-
+	std::wstring dllPath= m_services->GetCurrentDirFilePath(DLL_LOAD_MON_DLL_NAME);
 	// Step 3: Validate export in hook DLL
 	DWORD hookCodeOffset = 0;
-	if (!m_services->CheckExportFromFile(L"DllLoadMon.dll", "DllLoadMonHook_X64", &hookCodeOffset)) {
-		LOG_UI(m_services, L"[DelayHook] Export validation failed\n");
+	if (!m_services->CheckExportFromFile(dllPath.c_str(), DLL_LOAD_MON_EXPORT_X64, &hookCodeOffset)) {
+		LOG_UI(m_services, L"failed to call CheckExportFromFile\n");
 		return false;
 	}
-
-
-
-
     
     // Step 5: Inject DllLoadMon.dll into target process
-    if (!m_services->InjectTrampoline(pid, dllPath)) {
+    if (!m_services->InjectTrampoline(pid, dllPath.c_str())) {
+		LOG_UI(m_services, L"failed to call InjectTrampoline\n");
         return false;
     }
     
     // Step 6: Wait for DllLoadMon.dll to load in target process
     DWORD64 dllLoadMonBase = 0;
     for (int i = 0; i < 50; i++) {
-        if (m_services->GetModuleBase(pid, L"DllLoadMon.dll", &dllLoadMonBase)) {
+        if (m_services->GetModuleBase(pid, DLL_LOAD_MON_DLL_NAME, &dllLoadMonBase)) {
             break;
         }
         Sleep(100);
     }
     
     if (dllLoadMonBase == 0) {
+		LOG_UI(m_services, L"%s filed to be injected into target Pid=%u\n", DLL_LOAD_MON_DLL_NAME, pid);
         return false;  // Timeout waiting for module to load
     }
     
-    // Step 7: Load DllLoadMon.dll locally to get export offset
-    HMODULE hDllLoadMon = LoadLibraryExW(dllPath, NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
-    if (!hDllLoadMon) {
-        return false;
-    }
-    
-    typedef void (*PFN_DllLoadMonHook_X64)(PVOID, PVOID, PVOID, PVOID, PVOID);
-    PFN_DllLoadMonHook_X64 pfnLocal = 
-        (PFN_DllLoadMonHook_X64)GetProcAddress(hDllLoadMon, "DllLoadMonHook_X64");
-    
-    FreeLibrary(hDllLoadMon);
-    
-    if (!pfnLocal) {
-        return false;
-    }
-    
-    // Step 8: Calculate export offset from local module base
-    DWORD64 localBase = (DWORD64)hDllLoadMon;
-    DWORD64 exportOffset = (DWORD64)pfnLocal - localBase;
-    
     // Step 9: Calculate function address in TARGET process
-    DWORD64 targetFuncAddr = dllLoadMonBase + exportOffset;
+    DWORD64 targetFuncAddr = dllLoadMonBase + hookCodeOffset;
     
     // Step 10: Apply hook using HookCore::ApplyHook with target process address
     DWORD oriLen = 0;
@@ -251,7 +230,7 @@ bool DllLoadMonManager::InstallLdrLoadDllHook(DWORD pid) {
         ldrLoadDllRetAddr,
         nullptr,  // services - not needed for DllLoadMon hook
         targetFuncAddr,  // Use calculated target process address
-        0x9001,   // Hook ID (DELAYLOAD_MON)
+		DLL_LOAD_MON_HOOK_ID,   // Hook ID (DELAYLOAD_MON)
         &oriLen,
         &trampolinePit,
         &oriCodeAddr
