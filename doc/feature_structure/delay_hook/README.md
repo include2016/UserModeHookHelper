@@ -1,5 +1,6 @@
-时序图：
+[时序图在线查看](https://www.mermaidonline.live/zh/editor)
 
+delay hook特性的总体逻辑
 ```
 sequenceDiagram
     participant UM as UMController
@@ -47,8 +48,46 @@ sequenceDiagram
     end
 ```
 
-将上述代码复制到[这里](https://www.mermaidonline.live/zh/editor)查看
 
 
+UmController和DllLoadMon组件的通信机制：
+```
+sequenceDiagram
+    participant UM as UMController
+    participant MMF as Memory-Mapped File
+    participant DL as DllLoadMon (target process)
+    participant KM as Kernel/Filter
 
-![image-20260328154009633](README.assets\image-20260328154009633.png)
+    Note over UM,DL: Setup Phase
+    UM->>MMF: CreateFileMapping<br/>Global\DllLoadMon_SharedData_{PID}
+    UM->>MMF: MapViewOfFile()
+    UM->>MMF: Populate ModuleNames[]
+    UM->>MMF: Initialize events
+    Note right of UM: Keep file mapping<br/>handle alive
+
+    Note over UM,DL: Monitoring Phase
+    loop LdrLoadDll calls in target process
+        DL->>DL: Check if DLL in watch list
+        alt DLL is watched
+            DL->>UM: Signal hLoadEvent
+            Note over UM: Apply pending hooks
+            UM->>UM: HookCore::ApplyHook()
+            UM->>UM: Wait for trampoline load
+            UM->>DL: Signal hReleaseEvent
+            DL->>DL: Continue execution
+        else DLL not watched
+            DL->>DL: Normal execution
+        end
+    end
+
+    Note over UM,DL: Cleanup Phase
+    alt Process terminates
+        UM->>UM: OnUpdateProcess()<br/>detects exit
+        UM->>MMF: CleanupWatchList()
+        MMF-->>UM: Resources freed
+    else Hook removed
+        UM->>UM: HandleRemoveHook()
+        UM->>MMF: CleanupWatchListByPid()
+        MMF-->>UM: Resources freed
+    end
+```
