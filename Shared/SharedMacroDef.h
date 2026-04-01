@@ -134,3 +134,12 @@ typedef struct _PH_MODULE_LIST_NODE {
 
 
 #define TRAMPOLINE_INJECTION_TIMEOUT 500	// 默认超时时间500ms
+\
+
+#define DLL_LOAD_MON_SHARED_DATA_FMT L"Global\\DllLoadMon_SharedData_%lu"
+
+#define DELAY_HOOK_LOAD_EVENT_FMT L"Global\\DelayHook_Load_%lu"
+#define DELAY_HOOK_RELEASE_EVENT_FMT L"Global\\DelayHook_Release_%lu"
+#define DLL_LOAD_MON_DATA_ACCESS_EVENT_FMT L"Global\\DelayHook_Access_%lu"
+
+#define DLL_LOAD_MON_DATA_ACCESS_TIMEOUT 500  // 500ms

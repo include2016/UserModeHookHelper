@@ -1,4 +1,4 @@
-// DllLoadMonManager.cpp - Implementation of DllLoadMon management
+﻿// DllLoadMonManager.cpp - Implementation of DllLoadMon management
 
 #include "DllLoadMonManager.h"
 #include "../ProcessHackerLib/phlib_expose.h"
@@ -19,16 +19,19 @@ bool DllLoadMonManager::RegisterModuleWatch(DWORD pid, const wchar_t* moduleName
 		return false;
 	}
 
+	// Check if this is the first module for this process
+	bool isFirstModule = m_WatchedModules[pid].empty();
+	
 	// Accumulate module name for this process
 	m_WatchedModules[pid].push_back(moduleName);
 
 	// If this is the first module, setup DllLoadMon infrastructure
-	if (m_WatchedModules[pid].size() == 1) {
+	if (isFirstModule) {
 		return SetupDllLoadMon(pid);
 	}
 
-	// Subsequent modules are already covered by existing watch list
-	return true;
+	// For subsequent modules, update the shared memory with the new watch list
+	return UpdateWatchListInSharedMemory(pid);
 }
 
 void DllLoadMonManager::UnregisterModuleWatch(DWORD pid) {
@@ -75,12 +78,21 @@ bool DllLoadMonManager::SetupDllLoadMon(DWORD pid) {
 	// Construct shared memory name: Global\DllLoadMon_SharedData_{PID}
 	wchar_t sharedMemName[64];
 	_snwprintf_s(sharedMemName, _countof(sharedMemName), _TRUNCATE,
-		L"Global\\DllLoadMon_SharedData_%lu", pid);
+		DLL_LOAD_MON_SHARED_DATA_FMT, pid);
 
-	// Create file mapping with initial size
+	// Setup security descriptor to allow access from all processes (including low-privilege)
+	SECURITY_ATTRIBUTES sa;
+	SECURITY_DESCRIPTOR sd;
+	InitializeSecurityDescriptor(&sd, SECURITY_DESCRIPTOR_REVISION);
+	SetSecurityDescriptorDacl(&sd, TRUE, NULL, TRUE);  // NULL DACL = allow everyone
+	sa.nLength = sizeof(sa);
+	sa.lpSecurityDescriptor = &sd;
+	sa.bInheritHandle = FALSE;
+
+	// Create file mapping with explicit security attributes
 	hFileMapping = CreateFileMappingW(
 		INVALID_HANDLE_VALUE,
-		NULL,
+		&sa,  // Security attributes allowing everyone
 		PAGE_READWRITE,
 		0,
 		sizeof(DllLoadMonSharedData),
@@ -108,32 +120,9 @@ bool DllLoadMonManager::SetupDllLoadMon(DWORD pid) {
 	// Zero-initialize the shared structure
 	RtlZeroMemory(pSharedData, sizeof(DllLoadMonSharedData));
 
-	// Create event names
-	wchar_t loadEventName[64];
-	wchar_t releaseEventName[64];
-	_snwprintf_s(loadEventName, _countof(loadEventName), _TRUNCATE,
-		L"Global\\DelayHook_Load_%lu", pid);
-	_snwprintf_s(releaseEventName, _countof(releaseEventName), _TRUNCATE,
-		L"Global\\DelayHook_Release_%lu", pid);
-
-	// Create synchronization events
-	HANDLE hLoadEvent = CreateEventW(NULL, FALSE, FALSE, loadEventName);
-	HANDLE hReleaseEvent = CreateEventW(NULL, FALSE, FALSE, releaseEventName);
-
-	if (!hLoadEvent || !hReleaseEvent) {
-		if (hLoadEvent) CloseHandle(hLoadEvent);
-		if (hReleaseEvent) CloseHandle(hReleaseEvent);
-		UnmapViewOfFile(pSharedData);
-		CloseHandle(hFileMapping);
-		return false;
-	}
 
 	// Store event handles in shared structure
-	pSharedData->hLoadEvent = hLoadEvent;
-	pSharedData->hReleaseEvent = hReleaseEvent;
-
-	// Initialize lock
-	InitializeSRWLock((PSRWLOCK)&pSharedData->WatchListLock);
+	 
 
 	// Populate watch list with module names
 	UINT moduleCount = 0;
@@ -151,15 +140,88 @@ bool DllLoadMonManager::SetupDllLoadMon(DWORD pid) {
 
 	// Store module count
 	pSharedData->ModuleCount = moduleCount;
-	pSharedData->dwWatchCount = moduleCount;  // �� ������һ��
+	pSharedData->dwWatchCount = moduleCount;  // ¡û ÐÂÔöÕâÒ»ÐÐ
 
 	// Store handles (note: storing mapped view pointer as HANDLE for compatibility)
 	m_WatchFileMappings[pid] = hFileMapping;
-	m_LoadEvents[pid] = hLoadEvent;
-	m_ReleaseEvents[pid] = hReleaseEvent;
+	 
+	// Create event names
+	wchar_t loadEventName[64];
+	wchar_t releaseEventName[64];
+	wchar_t accessEventName[64];
+	_snwprintf_s(loadEventName, _countof(loadEventName), _TRUNCATE,
+		DELAY_HOOK_LOAD_EVENT_FMT, pid);
+	_snwprintf_s(releaseEventName, _countof(releaseEventName), _TRUNCATE,
+		DELAY_HOOK_RELEASE_EVENT_FMT, pid);
+	_snwprintf_s(accessEventName, _countof(accessEventName), _TRUNCATE,
+		DLL_LOAD_MON_DATA_ACCESS_EVENT_FMT, pid);
+
+	// Create synchronization events
+	// Create events with explicit security attributes for cross-process access
+	// 创建事件，句柄暂时先不管
+	 CreateEventW(&sa, FALSE, FALSE, loadEventName);
+	 CreateEventW(&sa, FALSE, FALSE, releaseEventName);
+
+
 
 	// Now install the LdrLoadDll hook
 	return InstallLdrLoadDllHook(pid);
+}
+
+// Helper function to create security descriptor that allows everyone access
+bool DllLoadMonManager::UpdateWatchListInSharedMemory(DWORD pid) {
+	// Get the file mapping for this process
+	auto itMap = m_WatchFileMappings.find(pid);
+	if (itMap == m_WatchFileMappings.end() || !itMap->second) {
+		return false;  // No shared memory exists yet
+	}
+
+	// Get the mapped view pointer
+	DllLoadMonSharedData* pSharedData = (DllLoadMonSharedData*)itMap->second;
+
+	// Acquire exclusive access using mutex event
+	wchar_t accessEventName[64];
+	_snwprintf_s(accessEventName, _countof(accessEventName), _TRUNCATE,
+		DLL_LOAD_MON_DATA_ACCESS_EVENT_FMT, pid);
+	
+	// Open with EVENT_MODIFY_STATE permission to allow SetEvent/ResetEvent operations
+	HANDLE hAccessEvent = OpenEventW(EVENT_MODIFY_STATE | SYNCHRONIZE, FALSE, accessEventName);
+	if (!hAccessEvent) {
+		LOG_UI(m_services, L"Failed to open access event for PID %d, Error=0x%x\n", pid, GetLastError());
+		return false;
+	}
+
+	// Wait for exclusive access (timeout 5 seconds)
+	DWORD waitResult = WaitForSingleObject(hAccessEvent, DLL_LOAD_MON_DATA_ACCESS_TIMEOUT);
+	if (waitResult != WAIT_OBJECT_0) {
+		LOG_UI(m_services, L"Failed to acquire access lock for PID %d, WaitResult=0x%x\n", pid, waitResult);
+		CloseHandle(hAccessEvent);
+		return false;
+	}
+
+	// Populate watch list with module names
+	UINT moduleCount = 0;
+	for (const auto& modName : m_WatchedModules[pid]) {
+		if (moduleCount >= DLM_MAX_WATCHED_MODULES) {
+			break;
+		}
+
+		size_t copyLen = min(modName.length(), (size_t)(DLM_MAX_MODULE_NAME_LEN - 1));
+		wcsncpy_s(pSharedData->ModuleNames[moduleCount], DLM_MAX_MODULE_NAME_LEN,
+			modName.c_str(), _TRUNCATE);
+		pSharedData->ModuleNames[moduleCount][copyLen] = L'\0';
+		moduleCount++;
+	}
+
+	// Store module count
+	pSharedData->ModuleCount = moduleCount;
+	pSharedData->dwWatchCount = moduleCount;
+
+	// Release exclusive access
+	SetEvent(hAccessEvent);
+	CloseHandle(hAccessEvent);
+
+	return true;
 }
 
 DWORD64 DllLoadMonManager::CalculateNtdllLdrLoadDllRetOffset(DWORD pid, bool is64Bit) {
@@ -193,18 +255,18 @@ bool DllLoadMonManager::InstallLdrLoadDllHook(DWORD pid) {
 	std::wstring dllPath = m_services->GetCurrentDirFilePath(DLL_LOAD_MON_DLL_NAME);
 
 
-	// ����
-	// ========== �ڴ˴����Ӹ����߼� ==========
+	// ¸´ÖÆ
+	// ========== ÔÚ´Ë´¦Ìí¼Ó¸´ÖÆÂß¼­ ==========
 	std::wstring pathToInject = dllPath;
 	wchar_t* temp_dll_name = nullptr;
 
 	{
-		// ��ȡDLL�ļ���
+		// ÌáÈ¡DLLÎÄ¼þÃû
 		size_t pos = dllPath.find_last_of(L'\\');
 		std::wstring dll_name = (pos != std::wstring::npos) ?
 			dllPath.substr(pos + 1) : dllPath;
 
-		// ��ȡ��������Ŀ¼��Ϊ��ʱ�ļ���
+		// »ñÈ¡³ÌÐòËùÔÚÄ¿Â¼×÷ÎªÁÙÊ±ÎÄ¼þ¼Ð
 		
 		std::wstring modPath(dllPath);
 		size_t p = modPath.find_last_of(L"\\/");
@@ -212,7 +274,7 @@ bool DllLoadMonManager::InstallLdrLoadDllHook(DWORD pid) {
 			L".\\" HOOK_CODE_TEMP_DIR_NAME :
 			modPath.substr(0, p) + L"\\" HOOK_CODE_TEMP_DIR_NAME;
 
-		// ȷ��Ŀ¼����
+		// È·±£Ä¿Â¼´æÔÚ
 		if (!CreateDirectoryW(folder.c_str(), NULL)) {
 			DWORD err = GetLastError();
 			if (err != ERROR_ALREADY_EXISTS) {
@@ -220,7 +282,7 @@ bool DllLoadMonManager::InstallLdrLoadDllHook(DWORD pid) {
 			}
 		}
 
-		// ���ɴ�ʱ������ļ���
+		// Éú³É´øÊ±¼ä´ÁµÄÎÄ¼þÃû
 		SYSTEMTIME st;
 		GetLocalTime(&st);
 		wchar_t ts[64];
@@ -236,9 +298,9 @@ bool DllLoadMonManager::InstallLdrLoadDllHook(DWORD pid) {
 
 		std::wstring dest = folder + L"\\" + new_dll_name;
 
-		// �����ļ�
+		// ¸´ÖÆÎÄ¼þ
 		if (CopyFileW(dllPath.c_str(), dest.c_str(), FALSE)) {
-			pathToInject = dest;  // ʹ�ø��ƺ���ļ�
+			pathToInject = dest;  // Ê¹ÓÃ¸´ÖÆºóµÄÎÄ¼þ
 			LOG_UI(m_services, L"Copied DllLoadMon DLL to %s\n", dest.c_str());
 		}
 		else {
@@ -246,7 +308,7 @@ bool DllLoadMonManager::InstallLdrLoadDllHook(DWORD pid) {
 			LOG_UI(m_services, L"CopyFileW failed src=%s dst=%s err=%u - falling back to original\n",
 				dllPath.c_str(), dest.c_str(), err);
 			return false;
-			// ����pathToInject Ϊԭʼ·��
+			// ±£³ÖpathToInject ÎªÔ­Ê¼Â·¾¶
 		}
 	}
 

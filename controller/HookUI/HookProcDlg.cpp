@@ -209,6 +209,7 @@ void HookProcDlg::OnBnClickedApplyHookSequence() {
 			
 			// ⭐ CRITICAL FIX: Register module watch to setup LdrLoadDll hook
 			// Without this, the DelayHook_Load event will never be signaled
+			MonitorParams* params = new MonitorParams;
 			m_DllLoadMonMgr.RegisterModuleWatch(targetPid, mod.c_str());
 			
 			// Create pending hook entry and store locally
@@ -229,7 +230,6 @@ void HookProcDlg::OnBnClickedApplyHookSequence() {
 			// Start monitor thread if not already running for this PID+module
 			bool needNewThread = true;
 			
-			MonitorParams* params = new MonitorParams;
 			params->processId = targetPid;
 			if (!m_services->GetHighAccessProcHandle(targetPid, &params->hProcess)) {
 				LOG_UI(m_services, L"failed to call GetHighAccessProcHandle, targetPid=%u\n", targetPid);
@@ -239,12 +239,34 @@ void HookProcDlg::OnBnClickedApplyHookSequence() {
 			params->moduleName = mod;
 			params->pDlg = this;
 			
-			std::wstring loadEventName = L"Global\\DelayHook_Load_" + std::to_wstring(targetPid);
-			std::wstring releaseEventName = L"Global\\DelayHook_Release_" + std::to_wstring(targetPid);
+
+
+
+			SECURITY_ATTRIBUTES sa;
+			SECURITY_DESCRIPTOR sd;
+			InitializeSecurityDescriptor(&sd, SECURITY_DESCRIPTOR_REVISION);
+			SetSecurityDescriptorDacl(&sd, TRUE, NULL, TRUE);  // NULL DACL = allow everyone
+			sa.nLength = sizeof(sa);
+			sa.lpSecurityDescriptor = &sd;
+			sa.bInheritHandle = FALSE;
+			// Create event names
+			wchar_t loadEventName[64];
+			wchar_t releaseEventName[64];
+			wchar_t accessEventName[64];
+			_snwprintf_s(loadEventName, _countof(loadEventName), _TRUNCATE,
+				DELAY_HOOK_LOAD_EVENT_FMT, targetPid);
+			_snwprintf_s(releaseEventName, _countof(releaseEventName), _TRUNCATE,
+				DELAY_HOOK_RELEASE_EVENT_FMT, targetPid);
+			_snwprintf_s(accessEventName, _countof(accessEventName), _TRUNCATE,
+				DLL_LOAD_MON_DATA_ACCESS_EVENT_FMT, targetPid);
+
+			// Create synchronization events
+			// Create events with explicit security attributes for cross-process access
+			params->hEventLoad = OpenEventW(SYNCHRONIZE | EVENT_MODIFY_STATE, FALSE,loadEventName);
+			params->hEventRelease = OpenEventW(SYNCHRONIZE | EVENT_MODIFY_STATE, FALSE, releaseEventName);
+
 			
-			params->hEventLoad = CreateEventW(NULL, FALSE, FALSE, loadEventName.c_str());
-			params->hEventRelease = CreateEventW(NULL, FALSE, FALSE, releaseEventName.c_str());
-			
+
 			if (!params->hEventLoad || !params->hEventRelease) {
 				LOG_UI(m_services, L"Failed to create delay hook events for PID %lu", targetPid);
 				delete params;

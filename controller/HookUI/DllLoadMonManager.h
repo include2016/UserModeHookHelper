@@ -18,7 +18,7 @@ public:
     ~DllLoadMonManager();
 
     // Register a module to watch for a specific process
-    bool RegisterModuleWatch(DWORD pid, const wchar_t* moduleName);
+	bool RegisterModuleWatch(DWORD pid, const wchar_t* moduleName);
     
     // Unregister all watches for a process
     void UnregisterModuleWatch(DWORD pid);
@@ -29,6 +29,9 @@ public:
 private:
     // Create shared memory and setup DllLoadMon for a process
     bool SetupDllLoadMon(DWORD pid);
+    
+        // Update the watch list in existing shared memory
+        bool UpdateWatchListInSharedMemory(DWORD pid);
     
     // Inject DllLoadMon.dll and hook LdrLoadDll
     bool InstallLdrLoadDllHook(DWORD pid);
