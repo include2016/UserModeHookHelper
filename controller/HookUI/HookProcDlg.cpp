@@ -1105,6 +1105,7 @@ bool HookProcDlg::HookCommonCode(DWORD64 module_base, DWORD module_offset,std::w
 		else {
 			DWORD err = GetLastError();
 			LOG_UI(m_services, L"CopyFileW failed src=%s dst=%s err=%u - falling back to original\n", hook_code_path.c_str(), dest.c_str(), err);
+			return false;
 			// keep pathToInject as original selectedPath
 		}
 	}

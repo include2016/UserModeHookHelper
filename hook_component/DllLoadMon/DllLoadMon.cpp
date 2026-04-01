@@ -4,11 +4,44 @@
 #include "pch.h"
 #include "DllLoadMon.h"
 #include <strsafe.h>
+#include <evntprov.h>
+#include "../HookCodeLib/HookCodeLib.h"
+static const GUID ProviderGUID =
+{ 0x3da12c0, 0x27c2, 0x4d75, { 0x95, 0x3a, 0x2c, 0x4e, 0x66, 0xa3, 0x74, 0x64 } };
+REGHANDLE g_ProviderHandle;
+#define DebugBreak() __debugbreak();
+void Log(_In_ PCWSTR Format, ...) {
+	WCHAR Buffer[1024];
+	va_list args;
+	va_start(args, Format);
+	_vsnwprintf_s(Buffer, RTL_NUMBER_OF(Buffer) - 1, Format, args);
+	va_end(args);
+	Buffer[RTL_NUMBER_OF(Buffer) - 1] = L'\0';
 
+	WCHAR Prefixed[1100];
+	_snwprintf_s(Prefixed, RTL_NUMBER_OF(Prefixed) - 1, L"[HookCode]   %s", Buffer);
+	Prefixed[RTL_NUMBER_OF(Prefixed) - 1] = L'\0';
+	EventWriteString(g_ProviderHandle, 0, 0, Prefixed);
+}
 // Global pointer to shared data (stored in memory-mapped file)
 static DllLoadMonSharedData* g_pSharedData = nullptr;
 static HANDLE g_hFileMapping = NULL;
+class HookServicesAdapter : public IHookServices {
+	VOID HKLog(const wchar_t* fmt, ...) override {
+		WCHAR Buffer[1024];
+		va_list args;
+		va_start(args, fmt);
+		_vsnwprintf_s(Buffer, RTL_NUMBER_OF(Buffer) - 1, fmt, args);
+		va_end(args);
+		Buffer[RTL_NUMBER_OF(Buffer) - 1] = L'\0';
 
+		WCHAR Prefixed[1100];
+		_snwprintf_s(Prefixed, RTL_NUMBER_OF(Prefixed) - 1, L"[HCLib]      %s", Buffer);
+		Prefixed[RTL_NUMBER_OF(Prefixed) - 1] = L'\0';
+		EventWriteString(g_ProviderHandle, 0, 0, Prefixed);
+	}
+};
+static HookServicesAdapter g_HookServices; // singleton adapter instance
 // PROLOG macros for capturing register values from hook context
 // X64 version - extracts registers from stack
 #define PROLOGX64(rsp)                                                         \
@@ -62,7 +95,7 @@ static BOOL InitializeSharedData() {
     }
     
     // Open existing file mapping (created by UMController)
-    g_hFileMapping = OpenFileMappingW(FILE_MAP_READ, FALSE, szMappingName);
+    g_hFileMapping = OpenFileMappingW(FILE_MAP_READ | FILE_MAP_WRITE, FALSE, szMappingName);
     if (!g_hFileMapping) {
         // File mapping not found - UMController hasn't created it yet
         // This is OK, we'll try again later or hooks won't trigger
@@ -132,6 +165,13 @@ static BOOL IsModuleInWatchList(PUNICODE_STRING dllName) {
         return FALSE;
     }
     
+	volatile LONG* pLock = &g_pSharedData->WatchListLock;
+	Log(L"pLock=0x%p\n", pLock);
+	if (!pLock) {  // 这个检查可能不够
+		return FALSE;
+	}
+
+
     // Simple spin lock using interlocked operations
     // Timeout after 1000 attempts to prevent deadlock
     int spinCount = 0;
@@ -425,7 +465,13 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
     case DLL_PROCESS_ATTACH:
         // Initialize shared data when DLL is loaded into a process
         // This will open the memory-mapped file created by UMController
-        InitializeSharedData();
+		 EventRegister(&ProviderGUID,
+			NULL,
+			NULL,
+			&g_ProviderHandle);
+		// set HookCodeLib interface
+		HookCode::SetHookServices(&g_HookServices);
+		InitializeSharedData();
         break;
         
     case DLL_PROCESS_DETACH:

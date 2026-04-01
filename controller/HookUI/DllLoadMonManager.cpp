@@ -151,6 +151,7 @@ bool DllLoadMonManager::SetupDllLoadMon(DWORD pid) {
 
 	// Store module count
 	pSharedData->ModuleCount = moduleCount;
+	pSharedData->dwWatchCount = moduleCount;  // ← 新增这一行
 
 	// Store handles (note: storing mapped view pointer as HANDLE for compatibility)
 	m_WatchFileMappings[pid] = hFileMapping;
@@ -190,15 +191,77 @@ bool DllLoadMonManager::InstallLdrLoadDllHook(DWORD pid) {
 
 
 	std::wstring dllPath = m_services->GetCurrentDirFilePath(DLL_LOAD_MON_DLL_NAME);
+
+
+	// 复制
+	// ========== 在此处添加复制逻辑 ==========
+	std::wstring pathToInject = dllPath;
+	wchar_t* temp_dll_name = nullptr;
+
+	{
+		// 提取DLL文件名
+		size_t pos = dllPath.find_last_of(L'\\');
+		std::wstring dll_name = (pos != std::wstring::npos) ?
+			dllPath.substr(pos + 1) : dllPath;
+
+		// 获取程序所在目录作为临时文件夹
+		
+		std::wstring modPath(dllPath);
+		size_t p = modPath.find_last_of(L"\\/");
+		std::wstring folder = (p == std::wstring::npos) ?
+			L".\\" HOOK_CODE_TEMP_DIR_NAME :
+			modPath.substr(0, p) + L"\\" HOOK_CODE_TEMP_DIR_NAME;
+
+		// 确保目录存在
+		if (!CreateDirectoryW(folder.c_str(), NULL)) {
+			DWORD err = GetLastError();
+			if (err != ERROR_ALREADY_EXISTS) {
+				LOG_UI(m_services, L"CreateDirectoryW failed for %s err=%u\n", folder.c_str(), err);
+			}
+		}
+
+		// 生成带时间戳的文件名
+		SYSTEMTIME st;
+		GetLocalTime(&st);
+		wchar_t ts[64];
+		swprintf(ts, _countof(ts), L"%04d%02d%02d_%02d%02d%02d_%03d",
+			st.wYear, st.wMonth, st.wDay,
+			st.wHour, st.wMinute, st.wSecond,
+			st.wMilliseconds);
+
+		std::wstring new_dll_name = std::wstring(ts) + L"_" + dll_name;
+		temp_dll_name = (wchar_t*)malloc(2 * (new_dll_name.length() + 1));
+		ZeroMemory(temp_dll_name, 2 * (new_dll_name.length() + 1));
+		memcpy(temp_dll_name, new_dll_name.c_str(), 2 * new_dll_name.length());
+
+		std::wstring dest = folder + L"\\" + new_dll_name;
+
+		// 复制文件
+		if (CopyFileW(dllPath.c_str(), dest.c_str(), FALSE)) {
+			pathToInject = dest;  // 使用复制后的文件
+			LOG_UI(m_services, L"Copied DllLoadMon DLL to %s\n", dest.c_str());
+		}
+		else {
+			DWORD err = GetLastError();
+			LOG_UI(m_services, L"CopyFileW failed src=%s dst=%s err=%u - falling back to original\n",
+				dllPath.c_str(), dest.c_str(), err);
+			return false;
+			// 保持pathToInject 为原始路径
+		}
+	}
+
+
+
+
 	// Step 3: Validate export in hook DLL
 	DWORD hookCodeOffset = 0;
-	if (!m_services->CheckExportFromFile(dllPath.c_str(), DLL_LOAD_MON_EXPORT_X64, &hookCodeOffset)) {
+	if (!m_services->CheckExportFromFile(pathToInject.c_str(), DLL_LOAD_MON_EXPORT_X64, &hookCodeOffset)) {
 		LOG_UI(m_services, L"failed to call CheckExportFromFile\n");
 		return false;
 	}
-
+	 
 	// Step 5: Inject DllLoadMon.dll into target process
-	if (!m_services->InjectTrampoline(pid, dllPath.c_str())) {
+	if (!m_services->InjectTrampoline(pid, pathToInject.c_str())) {
 		LOG_UI(m_services, L"failed to call InjectTrampoline\n");
 		return false;
 	}
