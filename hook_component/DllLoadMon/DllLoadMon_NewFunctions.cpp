@@ -79,9 +79,6 @@ BOOL DllLoadMon_CreateWatchList(
     pShared->hLoadEvent = hLoadEvent;
     pShared->hReleaseEvent = hReleaseEvent;
     
-    // Initialize lock (0 = unlocked)
-    pShared->WatchListLock = 0;
-    
     // Populate watch list with module names
     UINT moduleCount = 0;
     for (const auto& moduleName : moduleNames) {
@@ -99,6 +96,15 @@ BOOL DllLoadMon_CreateWatchList(
     
     // Store module count
     pShared->ModuleCount = moduleCount;
+    
+    // Set the watch count so IsModuleInWatchList knows how many entries to check
+    pShared->dwWatchCount = moduleCount;
+    
+    // Signal the data access event to indicate initialization is complete
+    // This is a manual-reset event, so it will stay signaled until explicitly reset
+    if (g_pSharedData && g_pSharedData->hDataAccessEvent) {
+        SetEvent(g_pSharedData->hDataAccessEvent);
+    }
     
     // Output handles
     *phFileMapping = hMapping;

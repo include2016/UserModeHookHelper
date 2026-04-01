@@ -1,4 +1,4 @@
-// DllLoadMon.cpp - DLL Load Monitor Hook Implementation
+ï»¿// DllLoadMon.cpp - DLL Load Monitor Hook Implementation
 // Rev6: Monitors LdrLoadDll return and signals UMController when target DLL is loaded
 
 #include "pch.h"
@@ -6,6 +6,7 @@
 #include <strsafe.h>
 #include <evntprov.h>
 #include "../HookCodeLib/HookCodeLib.h"
+#include "../../Shared/SharedMacroDef.h"
 static const GUID ProviderGUID =
 { 0x3da12c0, 0x27c2, 0x4d75, { 0x95, 0x3a, 0x2c, 0x4e, 0x66, 0xa3, 0x74, 0x64 } };
 REGHANDLE g_ProviderHandle;
@@ -89,13 +90,13 @@ static BOOL InitializeSharedData() {
     
     // Build file mapping name
     WCHAR szMappingName[MAX_PATH];
-    HRESULT hr = StringCchPrintfW(szMappingName, MAX_PATH, L"Global\\DllLoadMon_SharedData_%lu", pid);
+    HRESULT hr = StringCchPrintfW(szMappingName, MAX_PATH, DLL_LOAD_MON_SHARED_DATA_FMT, pid);
     if (FAILED(hr)) {
         return FALSE;
     }
     
     // Open existing file mapping (created by UMController)
-    g_hFileMapping = OpenFileMappingW(FILE_MAP_READ | FILE_MAP_WRITE, FALSE, szMappingName);
+    g_hFileMapping = OpenFileMappingW(FILE_MAP_ALL_ACCESS, FALSE, szMappingName);
     if (!g_hFileMapping) {
         // File mapping not found - UMController hasn't created it yet
         // This is OK, we'll try again later or hooks won't trigger
@@ -105,7 +106,7 @@ static BOOL InitializeSharedData() {
     // Map view of file into our address space
     g_pSharedData = (DllLoadMonSharedData*)MapViewOfFile(
         g_hFileMapping,
-        FILE_MAP_READ,
+        FILE_MAP_ALL_ACCESS,
         0, 0, sizeof(DllLoadMonSharedData)
     );
     
@@ -128,9 +129,10 @@ static BOOL InitializeEvents() {
             return FALSE;
         }
     }
-    
-    if (g_pSharedData->hLoadEvent && g_pSharedData->hReleaseEvent) {
-        return TRUE; // Already initialized
+
+    // Check if already initialized (including hDataAccessEvent)
+    if (g_pSharedData->hLoadEvent && g_pSharedData->hReleaseEvent && g_pSharedData->hDataAccessEvent) {
+        return TRUE;
     }
     
     // Get current process ID
@@ -139,14 +141,17 @@ static BOOL InitializeEvents() {
     // Build event names
     WCHAR szLoadEventName[MAX_PATH];
     WCHAR szReleaseEventName[MAX_PATH];
-    StringCchPrintfW(szLoadEventName, MAX_PATH, L"Global\\DelayHook_Load_%lu", pid);
-    StringCchPrintfW(szReleaseEventName, MAX_PATH, L"Global\\DelayHook_Release_%lu", pid);
+    WCHAR szDataAccessEventName[MAX_PATH];
+        StringCchPrintfW(szLoadEventName, MAX_PATH, DELAY_HOOK_LOAD_EVENT_FMT, pid);
+        StringCchPrintfW(szReleaseEventName, MAX_PATH, DELAY_HOOK_RELEASE_EVENT_FMT, pid);
+        StringCchPrintfW(szDataAccessEventName, MAX_PATH, DLL_LOAD_MON_DATA_ACCESS_EVENT_FMT, pid);
     
     // Open existing events (created by UMController)
     g_pSharedData->hLoadEvent = OpenEventW(SYNCHRONIZE, FALSE, szLoadEventName);
     g_pSharedData->hReleaseEvent = OpenEventW(SYNCHRONIZE | EVENT_MODIFY_STATE, FALSE, szReleaseEventName);
+    g_pSharedData->hDataAccessEvent = OpenEventW(SYNCHRONIZE, FALSE, szDataAccessEventName);
     
-    return (g_pSharedData->hLoadEvent && g_pSharedData->hReleaseEvent);
+    return (g_pSharedData->hLoadEvent && g_pSharedData->hReleaseEvent && g_pSharedData->hDataAccessEvent);
 }
 
 /**
@@ -156,6 +161,8 @@ static BOOL InitializeEvents() {
  * @return true if module is in watch list, false otherwise
  */
 static BOOL IsModuleInWatchList(PUNICODE_STRING dllName) {
+	Log(L"%wZ loading\n", dllName);
+
     if (!g_pSharedData || !dllName || !dllName->Buffer) {
         return FALSE;
     }
@@ -165,33 +172,23 @@ static BOOL IsModuleInWatchList(PUNICODE_STRING dllName) {
         return FALSE;
     }
     
-	volatile LONG* pLock = &g_pSharedData->WatchListLock;
-	Log(L"pLock=0x%p\n", pLock);
-	if (!pLock) {  // Õâ¸ö¼ì²é¿ÉÄÜ²»¹»
-		return FALSE;
-	}
-
-
-    // Simple spin lock using interlocked operations
-    // Timeout after 1000 attempts to prevent deadlock
-    int spinCount = 0;
-    while (InterlockedCompareExchange(&g_pSharedData->WatchListLock, 1, 0) != 0) {
-        if (++spinCount > 1000) {
-            return FALSE; // Lock acquisition timeout
+        // Wait for data access event with timeout before reading shared data
+        DWORD waitResult = WaitForSingleObject(g_pSharedData->hDataAccessEvent, DLL_LOAD_MON_DATA_ACCESS_TIMEOUT);
+        if (waitResult != WAIT_OBJECT_0) {
+			Log(L"HANDLE=0x%x\terror=0x%x\n", g_pSharedData->hDataAccessEvent, GetLastError());
+            // Timeout or error - skip monitoring to avoid blocking
+            return FALSE;
         }
-        YieldProcessor();
-    }
     
     // Critical section - reading watch list
     BOOL found = FALSE;
     for (DWORD i = 0; i < g_pSharedData->dwWatchCount; i++) {
         PCWSTR watchedName = g_pSharedData->ModuleNames[i];
-        
+		Log(L"checking watched name: %s\n", watchedName);
         // Validate string is null-terminated
         if (!watchedName[0]) {
             continue;
         }
-        
         // Compare Unicode strings (case-insensitive)
         // dllName->Length is in bytes, divide by sizeof(WCHAR) for character count
         if (_wcsnicmp(dllName->Buffer, watchedName, dllName->Length / sizeof(WCHAR)) == 0) {
@@ -199,9 +196,6 @@ static BOOL IsModuleInWatchList(PUNICODE_STRING dllName) {
             break;
         }
     }
-    
-    // Release lock
-    InterlockedExchange(&g_pSharedData->WatchListLock, 0);
     
     return found;
 }
@@ -235,58 +229,6 @@ VOID DllLoadMonHook_X64(PVOID rcx, PVOID rdx, PVOID r8, PVOID r9, PVOID rsp) {
     
     // RDI points to PUNICODE_STRING of DLL name being loaded
     PUNICODE_STRING dllName = (PUNICODE_STRING)rdi;
-    
-    // Validate pointer
-    if (!dllName || !dllName->Buffer || !dllName->Length) {
-        return;
-    }
-    
-    // Check if this DLL is in our watch list
-    if (IsModuleInWatchList(dllName)) {
-        // Target DLL detected! Notify UMController
-        if (g_pSharedData->hLoadEvent) {
-            SetEvent(g_pSharedData->hLoadEvent);
-        }
-        
-        // Wait for UMController to apply pending hooks
-        // Timeout after 5 seconds to prevent permanent deadlock
-        if (g_pSharedData->hReleaseEvent) {
-            WaitForSingleObject(g_pSharedData->hReleaseEvent, 5000);
-        }
-    }
-    
-    // Return to normal execution
-    return;
-}
-
-/**
- * Win32 Hook callback function
- * Called at LdrLoadDll return address
- * 
- * Parameters (from stack via PROLOG):
- * - EDI: PUNICODE_STRING of DLL name being loaded
- */
-extern "C" __declspec(dllexport)
-VOID DllLoadMonHook_Win32(ULONG esp) {
-    // Capture registers from stack
-    PROLOGWin32(esp);
-    
-    // Ensure shared data is initialized
-    if (!g_pSharedData) {
-        if (!InitializeSharedData()) {
-            return;
-        }
-    }
-    
-    // Ensure events are initialized
-    if (!g_pSharedData->hLoadEvent || !g_pSharedData->hReleaseEvent) {
-        if (!InitializeEvents()) {
-            return;
-        }
-    }
-    
-    // EDI points to PUNICODE_STRING of DLL name being loaded
-    PUNICODE_STRING dllName = (PUNICODE_STRING)edi;
     
     // Validate pointer
     if (!dllName || !dllName->Buffer || !dllName->Length) {
@@ -398,7 +340,6 @@ BOOL DllLoadMon_CreateWatchList(
     
     pShared->hLoadEvent = hLoadEvent;
     pShared->hReleaseEvent = hReleaseEvent;
-    pShared->WatchListLock = 0;
     
     UINT moduleCount = 0;
     for (const auto& moduleName : moduleNames) {
@@ -414,6 +355,15 @@ BOOL DllLoadMon_CreateWatchList(
     }
     
     pShared->ModuleCount = moduleCount;
+    
+    // Set the watch count so IsModuleInWatchList knows how many entries to check
+    pShared->dwWatchCount = moduleCount;
+    
+    // Signal the data access event to indicate initialization is complete
+    // This is a manual-reset event, so it will stay signaled until explicitly reset
+    if (g_pSharedData && g_pSharedData->hDataAccessEvent) {
+        SetEvent(g_pSharedData->hDataAccessEvent);
+    }
     
     *phFileMapping = hMapping;
     if (ppSharedData) {
