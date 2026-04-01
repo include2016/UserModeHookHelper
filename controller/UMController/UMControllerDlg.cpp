@@ -427,17 +427,82 @@ public:
 		return Helper::GetModuleBase(pid, target_module, base);
 	}
 	bool InjectTrampoline(DWORD targetPid, const wchar_t* fullDllPath) override {
+		DWORD timeoutMs = TRAMPOLINE_INJECTION_TIMEOUT;
+		// Step 1: 参数验证
 		if (targetPid == 0 || !fullDllPath || *fullDllPath == L'\0') {
-			app.GetETW().Log(L"[UMCtrl]     InjectTrampoline: invalid args pid=%u path=%s\n", targetPid, fullDllPath ? fullDllPath : L"(null)");
+			app.GetETW().Log(L"[UMCtrl] InjectTrampoline: invalid args pid=%u\n", targetPid);
 			return false;
 		}
-		// Reuse existing IPC file signaling API.
+
+		// Step 2: 提取DLL文件名用于构造事件名
+		std::wstring dllPath(fullDllPath);
+		size_t pos = dllPath.find_last_of(L"\\/");
+		std::wstring dllName = (pos != std::wstring::npos) ? dllPath.substr(pos + 1) : dllPath;
+
+		// Step 3: 构造要等待的事件名（在发送IPC前创建）
+		WCHAR eventName[MAX_PATH];
+		swprintf_s(eventName, RTL_NUMBER_OF(eventName) - 1,
+			HOOK_DLL_UM_INJECTED_DLL_LOADED_EVENT L"%u_%s",
+			targetPid, dllName.c_str());
+
+		// Step 4: 创建自动重置事件（初始无信号）
+		HANDLE hWaitEvent = CreateEventW(NULL, FALSE, FALSE, eventName);
+		if (!hWaitEvent) {
+			app.GetETW().Log(L"[UMCtrl] InjectTrampoline: failed to create wait event (err=%lu)\n", GetLastError());
+			return false;
+		}
+
+		// Step 5: 发送IPC注入信号
 		if (!IPC_SendInject(targetPid, fullDllPath)) {
-			app.GetETW().Log(L"[UMCtrl]     InjectTrampoline: IPC_SendInject failed pid=%u path=%s (err=%lu)\n", targetPid, fullDllPath, GetLastError());
+			app.GetETW().Log(L"[UMCtrl] InjectTrampoline: IPC_SendInject failed (err=%lu)\n", GetLastError());
+			CloseHandle(hWaitEvent);
 			return false;
 		}
-		app.GetETW().Log(L"[UMCtrl]     InjectTrampoline: signal sent pid=%u path=%s\n", targetPid, fullDllPath);
-		return true;
+
+		// Step 6: 如果需要等待，则阻塞直到超时或收到通知
+		if (timeoutMs > 0) {
+			app.GetETW().Log(L"[UMCtrl] InjectTrampoline: waiting for injection confirmation...\n");
+
+			DWORD waitResult = WaitForSingleObject(hWaitEvent, timeoutMs);
+			CloseHandle(hWaitEvent);
+
+			if (waitResult == WAIT_OBJECT_0) {
+				app.GetETW().Log(L"[UMCtrl] InjectTrampoline: confirmed success pid=%u\n", targetPid);
+				return true;
+			}
+			else if (waitResult == WAIT_TIMEOUT) {
+				app.GetETW().Log(L"[UMCtrl] InjectTrampoline: timeout (%lu ms) pid=%u - falling back to polling\n",
+					timeoutMs, targetPid);
+				// 超时后降级为传统轮询模式
+			}
+			else {
+				app.GetETW().Log(L"[UMCtrl] InjectTrampoline: wait failed (err=%lu), falling back to polling\n", GetLastError());
+			}
+		}
+		else {
+			// 不需要等待
+			CloseHandle(hWaitEvent);
+			app.GetETW().Log(L"[UMCtrl] InjectTrampoline: signal sent (no wait) pid=%u\n", targetPid);
+			return true;
+		}
+
+		// Step 7: 降级为传统轮询模式（保持向后兼容）
+		app.GetETW().Log(L"[UMCtrl] InjectTrampoline: using fallback polling for pid=%u\n", targetPid);
+
+		std::wstring trampName = dllName;
+		DWORD64 trampoline_dll_base = 0;
+		const int maxIterations = 50;
+
+		for (int iter = 0; iter < maxIterations; ++iter) {
+			if (GetModuleBase(targetPid, trampName.c_str(), &trampoline_dll_base) && trampoline_dll_base != 0) {
+				app.GetETW().Log(L"[UMCtrl] InjectTrampoline: detected via polling after %d iterations\n", iter + 1);
+				return true;
+			}
+			Sleep(100);
+		}
+
+		app.GetETW().Log(L"[UMCtrl] InjectTrampoline: polling timeout pid=%u\n", targetPid);
+		return false;
 	}
 	bool  GetFullImageNtPathByPID(DWORD pid, std::wstring& outNtPath) {
 		return Helper::GetFullImageNtPathByPID(pid, outNtPath);

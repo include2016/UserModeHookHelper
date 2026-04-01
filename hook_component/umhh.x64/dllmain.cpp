@@ -585,9 +585,40 @@ NTSTATUS mycode(_In_ PVOID ThreadParameter) {
 
 			EtwLog(L"constructed to be injected dll path: %s\n", buffer);
 
-			NTSTATUS st=pLdrLoadDll(0, 0, ustr, (PHANDLE)dllPath);
-			if (st != 0)
+			NTSTATUS st = pLdrLoadDll(0, 0, ustr, (PHANDLE)dllPath);
+			if (st != 0) {
 				EtwLog(L"LdrLoadDll call with DllPath=%s failed with Status=0x%x\n", buffer, st);
+			}
+			else {
+				// ✅ 注入成功，触发通知事件
+				EtwLog(L"LdrLoadDll SUCCESS: %s\n", buffer);
+
+				// 构造事件名：INJECTED_DLL_LOADED.{PID}.{DLL 名称哈希}
+				WCHAR eventName[150];
+				const wchar_t* dllName = wcsrchr(buffer, L'\\');
+				dllName = dllName ? dllName + 1 : buffer;
+
+				_snwprintf(eventName, RTL_NUMBER_OF(eventName) - 1,
+					HOOK_DLL_NT_INJECTED_DLL_LOADED_EVENT L"%u_%s",
+					NtCurrentProcessId(), dllName);
+
+				UNICODE_STRING uName;
+				RtlInitUnicodeString(&uName, eventName);
+
+				OBJECT_ATTRIBUTES oa;
+				InitializeObjectAttributes(&oa, &uName, OBJ_CASE_INSENSITIVE, NULL, NULL);
+
+				HANDLE hEvent = NULL;
+				NTSTATUS evtStatus = NtOpenEvent(&hEvent, EVENT_MODIFY_STATE | SYNCHRONIZE, &oa);
+				if (NT_SUCCESS(evtStatus)) {
+					NtSetEvent(hEvent, NULL);
+					EtwLog(L"Signaled injection success: %s\n", eventName);
+					NtClose(hEvent);
+				}
+				else {
+					EtwLog(L"Failed to open injection success event (caller may not be waiting): Status=0x%x\n", evtStatus);
+				}
+			}
 		}
 		NtResetEvent(g_EventHandle, NULL);
 	}
