@@ -1,3 +1,0 @@
-当前代码存在的问题，我没有看到对ntdll的ldrloaddll的hook操作
-
-你应该在RegisterModuleWatch调用之后，就使用DllLoadMon的导出函数hook住ntdll的ldrloaddll的返回位置，不然我们怎么监控dll的加载行为
