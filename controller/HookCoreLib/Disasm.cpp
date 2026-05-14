@@ -69,9 +69,15 @@ namespace HookCore {
 		// (i.e. end address of the last instruction). Use that and the last
 		// instruction size to compute the start address deterministically. If
 		// something unexpected happens, fall back to ins->address.
+		  
 		while (cs_disasm_iter(handle, (const uint8_t**)&p, &remaining, &rip, ins)) {
-			last = ins;
+			PatchType t = ClassifyInstruction(ins);
+			if (t == PT_CALL || t == PT_JMP || t == PT_JCC) {
+				last = ins;
+				break;  // 找到第一条 cfg 就停
+			}
 		}
+
 		if (!last) {
 			cs_free(ins, 1);
 			cs_close(&handle);
@@ -325,6 +331,31 @@ namespace HookCore {
 
 		uint64_t target = 0;
 
+
+		// here is a special case, original asm code is soemthing like this:
+		/*
+		00007ff8`fe0aa207 e8f88dffff      call    TbAmsiProv64+0x3004 (00007ff8`fe0a3004)
+		00007ff8`fe0aa20c 85c0            test    eax,eax
+		*/
+		// totally 7 bytes, it is enough to write our trampoline code, but the cfg instruction is located in first instruction
+		// special case check
+		const cs_detail* detail_ = insn[0].detail;
+		if (detail_->x86.operands[0].type == X86_OP_IMM) {
+			// then we need to figure out the real target address
+			const cs_x86_op& op = detail_->x86.operands[0];
+			uint64_t rip_after = insn[0].address + insn[0].size;
+			// get distance from instruction
+			DWORD distance = *(DWORD*)(codeBytes.data() + 1);
+			DWORD low_dword = (DWORD)rip_after + distance;
+
+			// this is the real address where we're calling into
+			target = (rip_after & 0xFFFFFFFF00000000) + low_dword;
+			cs_free(insn, count);
+			cs_close(&handle);
+			return target;
+		}
+
+
 		// --------------------------------------
 		// Case 1: Direct CALL / JMP / Jcc (imm)
 		// --------------------------------------
@@ -462,13 +493,13 @@ namespace HookCore {
 
 		if (!buffer || bufSize == 0) {
 			res.type = DecideResultType::FAIL_INSUFFICIENT_BYTES;
-			res.message = "buffer empty";
+			res.message = L"buffer empty";
 			return res;
 		}
 
 		csh handle = 0;
 		if (cs_open(CS_ARCH_X86, CS_MODE_64, &handle) != CS_ERR_OK) {
-			res.message = "cs_open failed";
+			res.message = L"cs_open failed";
 			return res;
 		}
 
@@ -483,7 +514,7 @@ namespace HookCore {
 		size_t count = cs_disasm(handle, buffer, bufSize, codeAddr, 0, &insn);
 		if (count == 0) {
 			res.type = DecideResultType::FAIL_CS_ERROR;
-			res.message = "capstone failed to disassemble buffer (count==0)";
+			res.message = L"capstone failed to disassemble buffer (count==0)";
 			cs_close(&handle);
 			return res;
 		}
@@ -507,7 +538,7 @@ namespace HookCore {
 			}
 
 			// control-flow categories we treat as 'terminal' (CALL, conditional jmp, unconditional jmp, RET)
-			bool isControlFlow = isCall || isJump || isRet;
+			bool isControlFlow = isJump || isRet;
 
 			// If this is a control-flow instruction:
 			if (isControlFlow) {
@@ -517,7 +548,7 @@ namespace HookCore {
 					if (sz >= minNeeded) {
 						res.type = DecideResultType::SUCCESS;
 						res.preserveLen = sz;
-						res.message = "first instruction is control-flow but big enough to cover minNeeded";
+						res.message = L"first instruction is control-flow but big enough to cover minNeeded";
 						cs_free(insn, count);
 						cs_close(&handle);
 						return res;
@@ -526,7 +557,7 @@ namespace HookCore {
 						// cannot safely apply 6-byte patch here — instruction too short
 						res.type = DecideResultType::FAIL_SHORT_CF_FIRST;
 						res.preserveLen = 0;
-						res.message = "first instruction is CALL/Jcc/JMP/RET and is shorter than minNeeded; use 12-byte fallback";
+						res.message = L"first instruction is CALL/Jcc/JMP/RET and is shorter than minNeeded; use 12-byte fallback";
 						cs_free(insn, count);
 						cs_close(&handle);
 						return res;
@@ -539,12 +570,12 @@ namespace HookCore {
 					if (total >= minNeeded) {
 						res.type = DecideResultType::SUCCESS;
 						res.preserveLen = total;
-						res.message = "control-flow encountered; included as terminal instruction; preserveLen >= minNeeded";
+						res.message = L"control-flow encountered; included as terminal instruction; preserveLen >= minNeeded";
 					}
 					else {
 						res.type = DecideResultType::FAIL_SHORT_CF_MID;
 						res.preserveLen = total;
-						res.message = "control-flow encountered before reaching minNeeded; preserveLen < minNeeded; fallback needed";
+						res.message = L"control-flow encountered before reaching minNeeded; preserveLen < minNeeded; fallback needed";
 					}
 					cs_free(insn, count);
 					cs_close(&handle);
@@ -557,7 +588,7 @@ namespace HookCore {
 				if (total >= minNeeded) {
 					res.type = DecideResultType::SUCCESS;
 					res.preserveLen = total;
-					res.message = "enough bytes accumulated; no unsafe control-flow seen";
+					res.message = L"enough bytes accumulated; no unsafe control-flow seen";
 					cs_free(insn, count);
 					cs_close(&handle);
 					return res;
@@ -571,12 +602,12 @@ namespace HookCore {
 		if (total >= minNeeded) {
 			res.type = DecideResultType::SUCCESS;
 			res.preserveLen = total;
-			res.message = "disassembly ended but total >= minNeeded";
+			res.message = L"disassembly ended but total >= minNeeded";
 		}
 		else {
 			res.type = DecideResultType::FAIL_INSUFFICIENT_BYTES;
 			res.preserveLen = total;
-			res.message = "ran out of buffer before reaching minNeeded; read more bytes";
+			res.message = L"ran out of buffer before reaching minNeeded; read more bytes";
 		}
 
 		cs_free(insn, count);
@@ -592,13 +623,13 @@ namespace HookCore {
 
 		if (!buffer || bufSize == 0) {
 			res.type = DecideResultType::FAIL_INSUFFICIENT_BYTES;
-			res.message = "buffer empty";
+			res.message = L"buffer empty";
 			return res;
 		}
 
 		csh handle = 0;
 		if (cs_open(CS_ARCH_X86, CS_MODE_32, &handle) != CS_ERR_OK) {
-			res.message = "cs_open failed";
+			res.message = L"cs_open failed";
 			return res;
 		}
 
@@ -612,7 +643,7 @@ namespace HookCore {
 		size_t count = cs_disasm(handle, buffer, bufSize, codeAddr, 0, &insn);
 		if (count == 0) {
 			res.type = DecideResultType::FAIL_CS_ERROR;
-			res.message = "capstone failed to disassemble buffer (count==0)";
+			res.message = L"capstone failed to disassemble buffer (count==0)";
 			cs_close(&handle);
 			return res;
 		}
@@ -639,7 +670,7 @@ namespace HookCore {
 					if (sz >= minNeeded) {
 						res.type = DecideResultType::SUCCESS;
 						res.preserveLen = sz;
-						res.message = "first instruction is control-flow but big enough to cover minNeeded";
+						res.message = L"first instruction is control-flow but big enough to cover minNeeded";
 						cs_free(insn, count);
 						cs_close(&handle);
 						return res;
@@ -647,7 +678,7 @@ namespace HookCore {
 					else {
 						res.type = DecideResultType::FAIL_SHORT_CF_FIRST;
 						res.preserveLen = 0;
-						res.message = "first instruction is CALL/Jcc/JMP/RET and is shorter than minNeeded; use fallback";
+						res.message = L"first instruction is CALL/Jcc/JMP/RET and is shorter than minNeeded; use fallback";
 						cs_free(insn, count);
 						cs_close(&handle);
 						return res;
@@ -658,12 +689,12 @@ namespace HookCore {
 					if (total >= minNeeded) {
 						res.type = DecideResultType::SUCCESS;
 						res.preserveLen = total;
-						res.message = "control-flow encountered; included as terminal instruction; preserveLen >= minNeeded";
+						res.message = L"control-flow encountered; included as terminal instruction; preserveLen >= minNeeded";
 					}
 					else {
 						res.type = DecideResultType::FAIL_SHORT_CF_MID;
 						res.preserveLen = total;
-						res.message = "control-flow encountered before reaching minNeeded; preserveLen < minNeeded; fallback needed";
+						res.message = L"control-flow encountered before reaching minNeeded; preserveLen < minNeeded; fallback needed";
 					}
 					cs_free(insn, count);
 					cs_close(&handle);
@@ -675,7 +706,7 @@ namespace HookCore {
 				if (total >= minNeeded) {
 					res.type = DecideResultType::SUCCESS;
 					res.preserveLen = total;
-					res.message = "enough bytes accumulated; no unsafe control-flow seen";
+					res.message = L"enough bytes accumulated; no unsafe control-flow seen";
 					cs_free(insn, count);
 					cs_close(&handle);
 					return res;
@@ -686,12 +717,12 @@ namespace HookCore {
 		if (total >= minNeeded) {
 			res.type = DecideResultType::SUCCESS;
 			res.preserveLen = total;
-			res.message = "disassembly ended but total >= minNeeded";
+			res.message = L"disassembly ended but total >= minNeeded";
 		}
 		else {
 			res.type = DecideResultType::FAIL_INSUFFICIENT_BYTES;
 			res.preserveLen = total;
-			res.message = "ran out of buffer before reaching minNeeded; read more bytes";
+			res.message = L"ran out of buffer before reaching minNeeded; read more bytes";
 		}
 
 		cs_free(insn, count);

@@ -15,7 +15,7 @@ namespace HookCore {
 	struct DecideResult {
 		DecideResultType type;
 		size_t preserveLen;     // valid if type == SUCCESS
-		std::string message;    // human-readable reason
+		std::wstring message;    // human-readable reason
 	};
 
 	DecideResult DetermineCodeEdge_x64(const uint8_t* buffer, size_t bufSize, uint64_t codeAddr, size_t minNeeded = 6);
