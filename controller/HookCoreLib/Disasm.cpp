@@ -50,7 +50,7 @@ namespace HookCore {
 		size_t codeSize,
 		UINT64 newBaseAddr,           // absolute address where code[] lives
 		UINT64 ff25StubAddr          // absolute address of ff25 stub
-	) { 
+	) {
 
 		// ----- decode -----
 		csh handle;
@@ -69,12 +69,13 @@ namespace HookCore {
 		// (i.e. end address of the last instruction). Use that and the last
 		// instruction size to compute the start address deterministically. If
 		// something unexpected happens, fall back to ins->address.
-		  
+
 		while (cs_disasm_iter(handle, (const uint8_t**)&p, &remaining, &rip, ins)) {
 			PatchType t = ClassifyInstruction(ins);
 			if (t == PT_CALL || t == PT_JMP || t == PT_JCC) {
 				last = ins;
-				break;  // 找到第一条 cfg 就停
+				// break when encounter any control flow instruction
+				break;
 			}
 		}
 
@@ -337,7 +338,7 @@ namespace HookCore {
 		00007ff8`fe0aa207 e8f88dffff      call    TbAmsiProv64+0x3004 (00007ff8`fe0a3004)
 		00007ff8`fe0aa20c 85c0            test    eax,eax
 		*/
-		// totally 7 bytes, it is enough to write our trampoline code, but the cfg instruction is located in first instruction
+		// totally 7 bytes, it is enough to write our trampoline code, but the control flow instruction is located in first instruction
 		// special case check
 		const cs_detail* detail_ = insn[0].detail;
 		if (detail_->x86.operands[0].type == X86_OP_IMM) {
@@ -470,11 +471,11 @@ namespace HookCore {
 				SIZE_T bytesRead = 0;
 
 				if (services->ReadPrimitive(
-					 
+
 					(LPVOID)effective_addr,
 					&resolved,
 					sizeof(resolved))
-					&& (resolved!=0))
+					&& (resolved != 0))
 				{
 					target = resolved;  // final resolved jump/call destination
 				}
@@ -731,149 +732,149 @@ namespace HookCore {
 
 	}
 
-uint64_t ResolveLeaInstruction(HANDLE hProcess, uint64_t startAddr, size_t maxRead) {
-	if (!hProcess || startAddr == 0) return 0;
+	uint64_t ResolveLeaInstruction(HANDLE hProcess, uint64_t startAddr, size_t maxRead) {
+		if (!hProcess || startAddr == 0) return 0;
 
-	size_t readLen = 64; // initial read
-	const char matchStr[] = "0x%p\n";
-	const size_t matchLen = sizeof(matchStr) - 1; // without null
+		size_t readLen = 64; // initial read
+		const char matchStr[] = "0x%p\n";
+		const size_t matchLen = sizeof(matchStr) - 1; // without null
 
-	// We'll progressively read larger buffers up to maxRead
-	while (readLen <= maxRead) {
-		std::vector<uint8_t> buf(readLen);
-		SIZE_T bytesRead = 0;
-		if (!ReadProcessMemory(hProcess, (LPCVOID)startAddr, buf.data(), readLen, &bytesRead) || bytesRead == 0) {
+		// We'll progressively read larger buffers up to maxRead
+		while (readLen <= maxRead) {
+			std::vector<uint8_t> buf(readLen);
+			SIZE_T bytesRead = 0;
+			if (!ReadProcessMemory(hProcess, (LPCVOID)startAddr, buf.data(), readLen, &bytesRead) || bytesRead == 0) {
+				return 0;
+			}
+
+			csh handle = 0;
+			if (cs_open(CS_ARCH_X86, CS_MODE_64, &handle) != CS_ERR_OK) return 0;
+			cs_option(handle, CS_OPT_DETAIL, CS_OPT_ON);
+
+			cs_insn* insn = nullptr;
+			size_t count = cs_disasm(handle, buf.data(), bytesRead, startAddr, 0, &insn);
+			if (count > 0) {
+				for (size_t i = 0; i < count; ++i) {
+					const cs_insn& cur = insn[i];
+					if (cur.id != X86_INS_LEA) continue;
+					const cs_detail* detail = cur.detail;
+					if (!detail) continue;
+					if (detail->x86.op_count < 2) continue;
+					const cs_x86_op& op2 = detail->x86.operands[1];
+					if (op2.type != X86_OP_MEM) continue;
+
+					// Resolve effective address if possible
+					uint64_t eff = 0;
+					if (op2.mem.base == X86_REG_RIP) {
+						int64_t disp = op2.mem.disp;
+						uint64_t rip_after = cur.address + cur.size;
+						eff = (uint64_t)((int64_t)rip_after + disp);
+					}
+					else if (op2.mem.base == X86_REG_INVALID) {
+						// absolute addressing -> disp holds absolute address
+						eff = (uint64_t)op2.mem.disp;
+					}
+					else {
+						// cannot resolve register-based memory operand here
+						continue;
+					}
+
+					if (eff == 0) continue;
+
+					// Read remote memory at eff to check for the ASCII pattern
+					char probe[64] = { 0 };
+					SIZE_T pr = 0;
+					if (ReadProcessMemory(hProcess, (LPCVOID)eff, probe, matchLen, &pr) && pr == matchLen) {
+						if (memcmp(probe, matchStr, matchLen) == 0) {
+							uint64_t foundAddr = cur.address;
+							cs_free(insn, count);
+							cs_close(&handle);
+							return foundAddr;
+						}
+					}
+				}
+				cs_free(insn, count);
+			}
+			cs_close(&handle);
+
+			// grow readLen conservatively
+			if (readLen < 256) readLen += 16; else readLen += 256;
+			if (readLen > maxRead) readLen = maxRead;
+		}
+
+		return 0;
+	}
+
+	uint32_t ResolveRipRelativeTarget_x86(
+		HANDLE hProcess,
+		uint32_t hookSiteBase,
+		const std::vector<uint8_t>& codeBytes
+	)
+	{
+		csh handle;
+		cs_insn* insn = nullptr;
+
+		if (cs_open(CS_ARCH_X86, CS_MODE_32, &handle) != CS_ERR_OK)
+			return 0;
+
+		cs_option(handle, CS_OPT_DETAIL, CS_OPT_ON);
+
+		size_t count = cs_disasm(
+			handle,
+			codeBytes.data(),
+			codeBytes.size(),
+			hookSiteBase,
+			0,
+			&insn
+		);
+
+		if (count == 0) {
+			cs_close(&handle);
 			return 0;
 		}
 
-		csh handle = 0;
-		if (cs_open(CS_ARCH_X86, CS_MODE_64, &handle) != CS_ERR_OK) return 0;
-		cs_option(handle, CS_OPT_DETAIL, CS_OPT_ON);
+		const cs_insn& last = insn[count - 1];
+		const cs_detail* detail = last.detail;
 
-		cs_insn* insn = nullptr;
-		size_t count = cs_disasm(handle, buf.data(), bytesRead, startAddr, 0, &insn);
-		if (count > 0) {
-			for (size_t i = 0; i < count; ++i) {
-				const cs_insn& cur = insn[i];
-				if (cur.id != X86_INS_LEA) continue;
-				const cs_detail* detail = cur.detail;
-				if (!detail) continue;
-				if (detail->x86.op_count < 2) continue;
-				const cs_x86_op& op2 = detail->x86.operands[1];
-				if (op2.type != X86_OP_MEM) continue;
+		uint32_t target = 0;
 
-				// Resolve effective address if possible
-				uint64_t eff = 0;
-				if (op2.mem.base == X86_REG_RIP) {
-					int64_t disp = op2.mem.disp;
-					uint64_t rip_after = cur.address + cur.size;
-					eff = (uint64_t)((int64_t)rip_after + disp);
-				}
-				else if (op2.mem.base == X86_REG_INVALID) {
-					// absolute addressing -> disp holds absolute address
-					eff = (uint64_t)op2.mem.disp;
-				}
-				else {
-					// cannot resolve register-based memory operand here
-					continue;
-				}
+		// Case 1: direct immediate operand (CALL rel32 / JMP rel32 / Jcc imm)
+		if (detail->x86.op_count == 1 && detail->x86.operands[0].type == X86_OP_IMM) {
+			target = (uint32_t)detail->x86.operands[0].imm;
+			cs_free(insn, count);
+			cs_close(&handle);
+			return target;
+		}
 
-				if (eff == 0) continue;
+		// Case 2: memory operand - could be [eip + disp] encoded as mem with base == X86_REG_INVALID
+		if (detail->x86.op_count == 1 && detail->x86.operands[0].type == X86_OP_MEM) {
+			const cs_x86_op& op = detail->x86.operands[0];
 
-				// Read remote memory at eff to check for the ASCII pattern
-				char probe[64] = {0};
-				SIZE_T pr = 0;
-				if (ReadProcessMemory(hProcess, (LPCVOID)eff, probe, matchLen, &pr) && pr == matchLen) {
-					if (memcmp(probe, matchStr, matchLen) == 0) {
-						uint64_t foundAddr = cur.address;
-						cs_free(insn, count);
-						cs_close(&handle);
-						return foundAddr;
-					}
+			// Heuristic: Capstone for 32-bit EIP-relative memory often presents the operand
+			// with base == X86_REG_INVALID and mem.disp being the absolute address, or
+			// sometimes with mem.base == X86_REG_EIP. Handle both.
+			uint32_t effective = 0;
+			if (op.mem.base == X86_REG_EIP) {
+				uint32_t eip_after = (uint32_t)(last.address + last.size);
+				effective = (uint32_t)((int32_t)eip_after + (int32_t)op.mem.disp);
+			}
+			else if (op.mem.base == X86_REG_INVALID) {
+				// In some capstone builds disp may already be absolute
+				effective = (uint32_t)op.mem.disp;
+			}
+
+			if (effective != 0) {
+				// Read a pointer-sized value (4 bytes) from remote process
+				uint32_t resolved = 0;
+				SIZE_T bytesRead = 0;
+				if (ReadProcessMemory(hProcess, (LPCVOID)effective, &resolved, sizeof(resolved), &bytesRead) && bytesRead == sizeof(resolved)) {
+					target = resolved;
 				}
 			}
-			cs_free(insn, count);
 		}
-		cs_close(&handle);
 
-		// grow readLen conservatively
-		if (readLen < 256) readLen += 16; else readLen += 256;
-		if (readLen > maxRead) readLen = maxRead;
-	}
-
-	return 0;
-}
-
-uint32_t ResolveRipRelativeTarget_x86(
-	HANDLE hProcess,
-	uint32_t hookSiteBase,
-	const std::vector<uint8_t>& codeBytes
-)
-{
-	csh handle;
-	cs_insn* insn = nullptr;
-
-	if (cs_open(CS_ARCH_X86, CS_MODE_32, &handle) != CS_ERR_OK)
-		return 0;
-
-	cs_option(handle, CS_OPT_DETAIL, CS_OPT_ON);
-
-	size_t count = cs_disasm(
-		handle,
-		codeBytes.data(),
-		codeBytes.size(),
-		hookSiteBase,
-		0,
-		&insn
-	);
-
-	if (count == 0) {
-		cs_close(&handle);
-		return 0;
-	}
-
-	const cs_insn& last = insn[count - 1];
-	const cs_detail* detail = last.detail;
-
-	uint32_t target = 0;
-
-	// Case 1: direct immediate operand (CALL rel32 / JMP rel32 / Jcc imm)
-	if (detail->x86.op_count == 1 && detail->x86.operands[0].type == X86_OP_IMM) {
-		target = (uint32_t)detail->x86.operands[0].imm;
 		cs_free(insn, count);
 		cs_close(&handle);
 		return target;
 	}
-
-	// Case 2: memory operand - could be [eip + disp] encoded as mem with base == X86_REG_INVALID
-	if (detail->x86.op_count == 1 && detail->x86.operands[0].type == X86_OP_MEM) {
-		const cs_x86_op& op = detail->x86.operands[0];
-
-		// Heuristic: Capstone for 32-bit EIP-relative memory often presents the operand
-		// with base == X86_REG_INVALID and mem.disp being the absolute address, or
-		// sometimes with mem.base == X86_REG_EIP. Handle both.
-		uint32_t effective = 0;
-		if (op.mem.base == X86_REG_EIP) {
-			uint32_t eip_after = (uint32_t)(last.address + last.size);
-			effective = (uint32_t)((int32_t)eip_after + (int32_t)op.mem.disp);
-		}
-		else if (op.mem.base == X86_REG_INVALID) {
-			// In some capstone builds disp may already be absolute
-			effective = (uint32_t)op.mem.disp;
-		}
-
-		if (effective != 0) {
-			// Read a pointer-sized value (4 bytes) from remote process
-			uint32_t resolved = 0;
-			SIZE_T bytesRead = 0;
-			if (ReadProcessMemory(hProcess, (LPCVOID)effective, &resolved, sizeof(resolved), &bytesRead) && bytesRead == sizeof(resolved)) {
-				target = resolved;
-			}
-		}
-	}
-
-	cs_free(insn, count);
-	cs_close(&handle);
-	return target;
-}
 }

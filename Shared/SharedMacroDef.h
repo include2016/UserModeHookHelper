@@ -119,7 +119,6 @@ typedef struct _PH_MODULE_LIST_NODE {
 #define E9_JMP_INSTRUCTION_OPRAND_SIZE 0x4
 
 
-// ========== 新增：DLL 注入完成通知事件 ==========
 #ifndef INJECTED_DLL_LOADED_EVENT_BASE
 #define INJECTED_DLL_LOADED_EVENT_BASE L"INJECTED_DLL_LOADED."
 #endif
@@ -133,7 +132,7 @@ typedef struct _PH_MODULE_LIST_NODE {
 #endif
 
 
-#define TRAMPOLINE_INJECTION_TIMEOUT 500	// 默认超时时间500ms
+#define TRAMPOLINE_INJECTION_TIMEOUT 500
 \
 
 #define DLL_LOAD_MON_SHARED_DATA_FMT L"Global\\DllLoadMon_SharedData_%lu"

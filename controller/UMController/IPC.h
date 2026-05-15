@@ -11,6 +11,10 @@
 #define USER_MODE_EARLY_BREAK_SIGNAL_FILE_FMT L"C:\\Users\\Public\\early.break.%016I64X"
 #define EARLY_BREAK_SIGNAL_FILE_FMT L"\\??\\" USER_MODE_EARLY_BREAK_SIGNAL_FILE_FMT
 
+#define USER_MODE_DELAY_HOOK_SIGNAL_FILE_FMT L"C:\\Users\\Public\\delay.hook.%016I64X"
+#define DELAY_HOOK_SIGNAL_FILE_FMT L"\\??\\" USER_MODE_DELAY_HOOK_SIGNAL_FILE_FMT
+
+
 
 // IPC API: write a null-terminated UTF-16 DLL path into the per-pid
 // named section and signal the corresponding per-pid named event.
