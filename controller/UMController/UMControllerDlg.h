@@ -15,6 +15,7 @@
 #include "FilterCommPort.h"
 #include "ProcessManager.h"
 #include "../../Shared/HookServices.h"
+#include "InstantHookManager.h"
 
 // CUMControllerDlg dialog
 class CUMControllerDlg : public CDialogEx
@@ -79,6 +80,8 @@ public:
 	afx_msg void OnSize(UINT nType, int cx, int cy);
 	// Context menu: Wake Up stub handler
 	afx_msg void OnWakeUp();
+	// Set Instant Hook handler
+	afx_msg void OnSetInstantHook();
 	// Removed obsolete OnTimer; enumeration-only mode no longer uses it.
 	afx_msg void OnToggleGlobalHookMode();
 	afx_msg LRESULT OnApplyGlobalHookMenu(WPARAM wParam, LPARAM lParam);
@@ -164,6 +167,8 @@ private:
 	afx_msg void OnPluginCommand(UINT nID);
 	afx_msg void OnPluginRefresh();
 	afx_msg void OnPluginUnloadAll();
+	// Instant Hook Manager for delay hook feature
+	InstantHookManager* m_InstantHookMgr = nullptr;
 	// Toggle Ob callback registration in kernel (prehandler-only)
 	afx_msg void OnAddWhitelist();
 	afx_msg void OnRemoveWhitelist();

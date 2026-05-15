@@ -867,7 +867,7 @@ namespace HookCore {
 				// Read a pointer-sized value (4 bytes) from remote process
 				uint32_t resolved = 0;
 				SIZE_T bytesRead = 0;
-				if (ReadProcessMemory(hProcess, (LPCVOID)effective, &resolved, sizeof(resolved), &bytesRead) && bytesRead == sizeof(resolved)) {
+				if (ReadProcessMemory(hProcess, (LPCVOID)(PVOID)(DWORD64)effective, &resolved, sizeof(resolved), &bytesRead) && bytesRead == sizeof(resolved)) {
 					target = resolved;
 				}
 			}

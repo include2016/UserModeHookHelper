@@ -327,9 +327,6 @@
     <ProjectReference Include="..\..\EtwTracer\EtwTracer.vcxproj">
       <Project>{e1ddc919-268c-4dd1-b0b5-8ed0d8554887}</Project>
     </ProjectReference>
-    <ProjectReference Include="..\EtwTracer\EtwTracer.vcxproj">
-      <Project>{e1ddc919-268c-4dd1-b0b5-8ed0d8554887}</Project>
-    </ProjectReference>
     <ProjectReference Include="..\HookCoreLib\HookCoreLib.vcxproj">
       <Project>{6c2e3e9c-1124-4f5e-9d6f-ac9a9b6e5e21}</Project>
     </ProjectReference>
@@ -348,6 +345,7 @@
     <ClCompile Include="FilterCommPort.cpp" />
     <ClCompile Include="Helper.cpp" />
     <ClCompile Include="HookActions.cpp" />
+    <ClCompile Include="InstantHookManager.cpp" />
     <ClCompile Include="IPC.cpp" />
     <ClCompile Include="LdrLoadDllOffsets.cpp" />
     <ClCompile Include="pch.cpp">

@@ -238,3 +238,27 @@ try {
     # ignore marker update errors
 }
 Write-Output "Done"
+
+# =============================================================================
+# USAGE
+# =============================================================================
+# 复制整个仓库到远程主机并拷贝驱动文件:
+#   .\copy_repo_and_sys.ps1 -RemoteHost "10.96.100.241" -Username "Administrator" -Password "qwe123..."
+#
+# 复制到自定义路径:
+#   .\copy_repo_and_sys.ps1 -RemoteHost "10.96.100.241" -Username "Admin" -Password "xxx" -RemoteBase "\\10.96.100.241\c$\CustomPath"
+#
+# char* 转 wchar* 用法 (C 代码参考):
+#   wchar_t* char_to_wchar(const char* src) {
+#       if (src == NULL) return NULL;
+#       int size_needed = MultiByteToWideChar(CP_ACP, 0, src, -1, NULL, 0);
+#       if (size_needed == 0) return NULL;
+#       wchar_t* result = (wchar_t*)malloc(size_needed * sizeof(wchar_t));
+#       if (result == NULL) return NULL;
+#       if (MultiByteToWideChar(CP_ACP, 0, src, -1, result, size_needed) == 0) {
+#           free(result);
+#           return NULL;
+#       }
+#       return result;
+#   }
+# =============================================================================

@@ -38,6 +38,8 @@
 // Extra menu command
 #define ID_MENU_EXTRA_ENABLE_GLOBAL_HOOK_MODE 40020
 #define ID_MENU_EXTRA_SELFDEFENSE       40022
+// Set Instant Hook context menu
+#define ID_MENU_SET_INSTANT_HOOK       40036
 #define ID_TOOLS_ADD_WHITELIST         40031
 #define ID_TOOLS_REMOVE_WHITELIST      40032
 // Plugin menu base (reserve a small range for plugin items)

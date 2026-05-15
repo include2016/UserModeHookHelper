@@ -141,5 +141,6 @@
     </ClCompile>
     <ClCompile Include="RemoveEarlyBreakDlg.cpp" />
     <ClCompile Include="LdrLoadDllOffsets.cpp" />
+    <ClCompile Include="InstantHookManager.cpp" />
   </ItemGroup>
 </Project>

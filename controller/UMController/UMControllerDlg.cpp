@@ -365,6 +365,7 @@ BEGIN_MESSAGE_MAP(CUMControllerDlg, CDialogEx)
 	ON_COMMAND(ID_MENU_ELEVATE_TO_PPL, &CUMControllerDlg::OnElevateToPpl)
 	ON_COMMAND(ID_MENU_UNPROTECT_PPL, &CUMControllerDlg::OnUnprotectPpl)
 	ON_COMMAND(ID_MENU_WAKE_UP, &CUMControllerDlg::OnWakeUp)
+	ON_COMMAND(ID_MENU_SET_INSTANT_HOOK, &CUMControllerDlg::OnSetInstantHook)
 END_MESSAGE_MAP()
 // Adapter implementing IHookServices for current process (bridges to ETW tracer)
 class HookServicesAdapter : public HookServicesBase {
@@ -784,6 +785,9 @@ BOOL CUMControllerDlg::OnInitDialog()
 	}
 	// set hookservice interface to PHLIB
 	PHLIB::SetHookServices(&g_HookServices);
+	// Initialize InstantHookManager
+	g_HookServices.SetDialog(this);
+	m_InstantHookMgr = new InstantHookManager(&g_HookServices);
 	
 	// TODO: Add extra initialization here
 	PM_Init();
@@ -1110,6 +1114,12 @@ void CUMControllerDlg::OnDestroy()
 		m_RescanThread.join();
 	}
 	if (m_RescanEvent) { CloseHandle(m_RescanEvent); m_RescanEvent = NULL; }
+	// Stop and cleanup InstantHookManager
+	if (m_InstantHookMgr) {
+		m_InstantHookMgr->StopAll();
+		delete m_InstantHookMgr;
+		m_InstantHookMgr = nullptr;
+	}
 	// No timeout timer in enumeration-only mode.
 }
 
@@ -1869,6 +1879,8 @@ void CUMControllerDlg::OnNMRClickListProc(NMHDR *pNMHDR, LRESULT *pResult)
 
 	// Add Force Inject menu for entries that are not in hook list and master DLL not loaded
 	menu.AppendMenu(MF_STRING, ID_MENU_FORCE_INJECT, L"Force Inject");
+	// Set Instant Hook for delay hook feature
+	menu.AppendMenu(MF_STRING, ID_MENU_SET_INSTANT_HOOK, L"Set Instant Hook");
 	// Temporarily hide PPL operations (Recover/Unprotect) from context menu
 
 	// grey out certai menu based on bInHookList
@@ -1950,6 +1962,95 @@ void CUMControllerDlg::OnWakeUp()
 	else {
 		LOG_CTRL_ETW(L"failed to set Event=%s to wake Pid=%d up, Error=0x%x\n", event_name, pid, GetLastError());
 	}
+}
+
+void CUMControllerDlg::OnSetInstantHook()
+{
+	// 1. Get selected process entry's PID and NT path
+	int nItem = m_ProcListCtrl.GetNextItem(-1, LVNI_SELECTED);
+	if (nItem == -1) return;
+	PROC_ITEMDATA packed = (PROC_ITEMDATA)m_ProcListCtrl.GetItemData(nItem);
+	DWORD pid = PID_FROM_ITEMDATA(packed);
+
+	// Get NT path from cache or process entry
+	std::wstring ntPath;
+	ProcKey key{ pid, {} };
+	auto it = m_SessionNtPathCache.find(key);
+	if (it != m_SessionNtPathCache.end()) {
+		ntPath = it->second;
+	}
+	else {
+		// Try to get from process entry directly
+		ProcessEntry entry;
+		int idx = -1;
+		if (PM_GetEntryCopyByPid(pid, entry, &idx)) {
+			ntPath = entry.path;
+		}
+	}
+	if (ntPath.empty()) {
+		MessageBox(L"Cannot get process NT path", L"Error", MB_ICONERROR);
+		return;
+	}
+
+	// 2. Pop up CFileDialog to select .hookseq file
+	CFileDialog dlg(TRUE, L".hookseq", NULL, OFN_HIDEREADONLY | OFN_FILEMUSTEXIST,
+		L"HookSeq Files (*.hookseq)|*.hookseq||");
+	if (dlg.DoModal() != IDOK) return;
+	std::wstring hookSeqPath = dlg.GetPathName();
+
+	// 3. Parse hookseq to get target DLL list
+	std::vector<InstantHookManager::HookTarget> targets;
+	if (!InstantHookManager::ParseHookSeqFile(hookSeqPath.c_str(), targets)) {
+		MessageBox(L"Failed to parse hookseq file", L"Error", MB_ICONERROR);
+		return;
+	}
+
+	// 4. Compute processFnvHash
+	unsigned long long processFnvHash = InstantHookManager::ComputeFnvHash(ntPath.c_str());
+
+	// 5. Write C:\users\public\delay.hook.<processFnvHash> file
+	WCHAR delayFile[MAX_PATH];
+	swprintf_s(delayFile, L"C:\\users\\public\\delay.hook.%016llx", processFnvHash);
+
+	// Copy hookseq content to delay.hook file
+	FILE* fin = NULL;
+	_wfopen_s(&fin,hookSeqPath.c_str(), L"rt, ccs=UNICODE");
+	if (!fin) {
+		MessageBox(L"Failed to open hookseq file", L"Error", MB_ICONERROR);
+		return;
+	}
+	FILE* fout = NULL;
+	_wfopen_s(&fout,delayFile, L"wt, ccs=UNICODE");
+	if (!fout) {
+		fclose(fin);
+		MessageBox(L"Failed to create delay.hook file", L"Error", MB_ICONERROR);
+		return;
+	}
+	wchar_t buf[4096];
+	while (fgetws(buf, _countof(buf), fin)) {
+		fputws(buf, fout);
+	}
+	fclose(fin);
+	fclose(fout);
+
+	// 6. For each target DLL, add to InstantHookManager with dllFnvHash
+	for (auto& t : targets) {
+		t.targetPid = pid;
+		t.processNtPath = ntPath;
+		t.processFnvHash = processFnvHash;
+		// Extract filename from dllPath for FNV hash
+		const wchar_t* fileName = wcsrchr(t.dllPath.c_str(), L'\\');
+		if (fileName) fileName++;
+		else fileName = t.dllPath.c_str();
+		t.dllFnvHash = InstantHookManager::ComputeFnvHash(fileName);
+		m_InstantHookMgr->AddTarget(t);
+	}
+
+	// 7. Start all listeners
+	m_InstantHookMgr->StartAllListeners();
+
+	MessageBox(L"Instant Hook configured successfully.\nStart the target process to apply hooks.",
+		L"Success", MB_ICONINFORMATION);
 }
 
 void CUMControllerDlg::OnElevateToPpl() {

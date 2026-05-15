@@ -66,7 +66,7 @@
   </ImportGroup>
   <ItemGroup>
     <ClInclude Include="HookUIFactory.h" />
-      <ClInclude Include="DllLoadMonManager.h" />
+    <ClInclude Include="DllLoadMonManager.h" />
     <ClInclude Include="HookProcDlg.h" />
     <ClInclude Include="HookInterfaces.h" />
     <ClInclude Include="HookUIResource.h" />
@@ -74,7 +74,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="HookUIFactory.cpp" />
-      <ClCompile Include="DllLoadMonManager.cpp" />
+    <ClCompile Include="DllLoadMonManager.cpp" />
     <ClCompile Include="HookProcDlg.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -92,7 +92,7 @@
     </ProjectReference>
   </ItemGroup>
   <PropertyGroup>
-    <OutDir>$(SolutionDir)$(Configuration)\..\x64\$(Configuration)</OutDir>
+    <OutDir>$(SolutionDir)$(Configuration)\..\x64\$(Configuration)\</OutDir>
     <IntDir>$(ProjectDir)x64\$(Configuration)\</IntDir>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">

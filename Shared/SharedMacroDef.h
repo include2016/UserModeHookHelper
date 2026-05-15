@@ -71,6 +71,14 @@
 #define WIDEN2(x) L##x
 #define WIDEN(x) WIDEN2(x)
 
+#define NTDLL_X86 L"\\??\\C:\\Windows\\SysWOW64\\ntdll.dll"
+#define NTDLL_X64 L"\\??\\C:\\Windows\\System32\\ntdll.dll"
+
+#ifdef _WIN64
+#define NTDLL_PATH NTDLL_X64
+#else
+#define NTDLL_PATH NTDLL_X86
+#endif
 
 
 // Simple module list node returned by PhBuildModuleListWow64
@@ -133,7 +141,6 @@ typedef struct _PH_MODULE_LIST_NODE {
 
 
 #define TRAMPOLINE_INJECTION_TIMEOUT 500
-\
 
 #define DLL_LOAD_MON_SHARED_DATA_FMT L"Global\\DllLoadMon_SharedData_%lu"
 
@@ -142,3 +149,7 @@ typedef struct _PH_MODULE_LIST_NODE {
 #define DLL_LOAD_MON_DATA_ACCESS_EVENT_FMT L"Global\\DelayHook_Access_%lu"
 
 #define DLL_LOAD_MON_DATA_ACCESS_TIMEOUT 500  // 500ms
+
+#define DELAY_HOOK_FILE_PREFIX L"C:\\users\\public\\delay.hook."
+#define LOAD_NOTIFY_EVENT_FMT L"LoadNotify.%llx.%llx"
+#define HOOK_NOTIFY_EVENT_FMT L"HookNotify.%llx.%llx"
