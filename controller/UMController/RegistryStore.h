@@ -94,4 +94,14 @@ namespace RegistryStore {
     bool GetPplOriginalProt(DWORD pid, DWORD hi, DWORD lo, DWORD& outProt);
     bool RemovePplOriginalProt(DWORD pid, DWORD hi, DWORD lo);
 
+    // Instant Hook configuration persistence
+    // Value name: InstantHookList (REG_MULTI_SZ)
+    // Each entry formatted as: PROCESS_FNV_HASH:DLL_FNV_HASH:HOOKSEQ_PATH
+    // Where HOOKSEQ_PATH is the path to .hookseq file
+    bool ReadInstantHookList(std::vector<std::tuple<unsigned long long, unsigned long long, std::wstring>>& outEntries);
+    bool WriteInstantHookList(const std::vector<std::tuple<unsigned long long, unsigned long long, std::wstring>>& entries);
+    bool AddInstantHookEntry(unsigned long long processFnvHash, unsigned long long dllFnvHash, const std::wstring& hookSeqPath);
+    bool RemoveInstantHookEntry(unsigned long long processFnvHash);
+    bool HasInstantHookEntry(unsigned long long processFnvHash);
+
 }

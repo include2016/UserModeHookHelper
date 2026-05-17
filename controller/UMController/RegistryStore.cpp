@@ -22,6 +22,7 @@ static const wchar_t* WHITELIST_HASHES_NAME = L"WhitelistHashes"; // NT path has
 static const wchar_t* PPL_ELEVATED_LIST_NAME = L"PplElevatedList"; // PID:HI:LOW entries for manual elevate
 static const wchar_t* PPL_UNPROTECTED_LIST_NAME = L"PplUnprotectedList"; // PID:HI:LOW entries for manual unprotect
 static const wchar_t* PPL_ORIGINAL_PROT_LIST_NAME = L"PplOriginalProtList"; // PID:HI:LOW=HEX32 original protection
+static const wchar_t* INSTANT_HOOK_LIST_NAME = L"InstantHookList"; // PROCESS_FNV:DLL_FNV:HOOKSEQ_PATH
 
 bool RegistryStore::ReadHookPaths(std::vector<std::wstring>& outPaths) {
 	outPaths.clear();
@@ -1018,4 +1019,121 @@ bool RegistryStore::RemoveWhitelistHash(unsigned long long hash) {
 	std::vector<std::wstring> strs; strs.reserve(out.size());
 	for (auto &h : out) { wchar_t b[32]; _snwprintf_s(b, _TRUNCATE, L"%016llX", h); strs.emplace_back(b); }
 	return WriteMultiSz(HKEY_LOCAL_MACHINE, REG_PERSIST_SUBKEY, WHITELIST_HASHES_NAME, strs);
+}
+
+// Instant Hook List persistence
+// Format: PROCESS_FNV_HASH:DLL_FNV_HASH:HOOKSEQ_PATH
+bool RegistryStore::ReadInstantHookList(std::vector<std::tuple<unsigned long long, unsigned long long, std::wstring>>& outEntries) {
+	outEntries.clear();
+	HKEY hKey = NULL;
+	LONG r = RegOpenKeyExW(HKEY_LOCAL_MACHINE, REG_PERSIST_SUBKEY, 0, KEY_READ, &hKey);
+	if (r != ERROR_SUCCESS) return true; // treat missing as empty
+	DWORD type = 0, dataSize = 0;
+	r = RegQueryValueExW(hKey, INSTANT_HOOK_LIST_NAME, NULL, &type, NULL, &dataSize);
+	if (r != ERROR_SUCCESS) { RegCloseKey(hKey); if (r == ERROR_FILE_NOT_FOUND) return true; return false; }
+	if (type != REG_MULTI_SZ) { RegCloseKey(hKey); return false; }
+	if (dataSize == 0) { RegCloseKey(hKey); return true; }
+	std::vector<wchar_t> buf(dataSize / sizeof(wchar_t));
+	r = RegQueryValueExW(hKey, INSTANT_HOOK_LIST_NAME, NULL, NULL, reinterpret_cast<LPBYTE>(buf.data()), &dataSize);
+	RegCloseKey(hKey);
+	if (r != ERROR_SUCCESS) return false;
+
+	size_t idx = 0, wcCount = dataSize / sizeof(wchar_t);
+	while (idx < wcCount) {
+		if (buf[idx] == L'\0') { ++idx; continue; }
+		std::wstring line(&buf[idx]);
+		idx += line.size() + 1;
+
+		// Parse: PROCESS_FNV:DLL_FNV:HOOKSEQ_PATH
+		size_t c1 = line.find(L':');
+		if (c1 == std::wstring::npos) continue;
+		size_t c2 = line.find(L':', c1 + 1);
+		if (c2 == std::wstring::npos) continue;
+
+		std::wstring procHashStr = line.substr(0, c1);
+		std::wstring dllHashStr = line.substr(c1 + 1, c2 - c1 - 1);
+		std::wstring hookSeqPath = line.substr(c2 + 1);
+
+		unsigned long long procHash = 0, dllHash = 0;
+		swscanf_s(procHashStr.c_str(), L"%llx", &procHash);
+		swscanf_s(dllHashStr.c_str(), L"%llx", &dllHash);
+
+		outEntries.emplace_back(procHash, dllHash, hookSeqPath);
+	}
+	return true;
+}
+
+bool RegistryStore::WriteInstantHookList(const std::vector<std::tuple<unsigned long long, unsigned long long, std::wstring>>& entries) {
+	std::vector<wchar_t> buf;
+	for (auto &e : entries) {
+		unsigned long long procHash = std::get<0>(e);
+		unsigned long long dllHash = std::get<1>(e);
+		const std::wstring& path = std::get<2>(e);
+
+		wchar_t line[MAX_PATH + 64];
+		_snwprintf_s(line, _TRUNCATE, L"%016llX:%016llX:%s", procHash, dllHash, path.c_str());
+		std::wstring l = line;
+		buf.insert(buf.end(), l.c_str(), l.c_str() + l.size());
+		buf.push_back(L'\0');
+	}
+	if (buf.empty() || buf.back() != L'\0') buf.push_back(L'\0');
+	buf.push_back(L'\0');
+
+	HKEY hKey = NULL; DWORD disp = 0;
+	LONG r = RegCreateKeyExW(HKEY_LOCAL_MACHINE, REG_PERSIST_SUBKEY, 0, NULL, REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, &hKey, &disp);
+	if (r != ERROR_SUCCESS) return false;
+	LONG rr = RegSetValueExW(hKey, INSTANT_HOOK_LIST_NAME, 0, REG_MULTI_SZ, reinterpret_cast<const BYTE*>(buf.data()), (DWORD)(buf.size() * sizeof(wchar_t)));
+	RegCloseKey(hKey);
+	return rr == ERROR_SUCCESS;
+}
+
+bool RegistryStore::AddInstantHookEntry(unsigned long long processFnvHash, unsigned long long dllFnvHash, const std::wstring& hookSeqPath) {
+	std::vector<std::tuple<unsigned long long, unsigned long long, std::wstring>> entries;
+	if (!ReadInstantHookList(entries)) return false;
+
+	// Check if entry already exists (by processFnvHash)
+	for (auto &e : entries) {
+		if (std::get<0>(e) == processFnvHash) return true; // Already exists
+	}
+
+	entries.emplace_back(processFnvHash, dllFnvHash, hookSeqPath);
+	return WriteInstantHookList(entries);
+}
+
+bool RegistryStore::RemoveInstantHookEntry(unsigned long long processFnvHash) {
+	std::vector<std::tuple<unsigned long long, unsigned long long, std::wstring>> entries;
+	if (!ReadInstantHookList(entries)) return false;
+
+	std::vector<std::tuple<unsigned long long, unsigned long long, std::wstring>> out;
+	bool removed = false;
+	for (auto &e : entries) {
+		if (!removed && std::get<0>(e) == processFnvHash) {
+			removed = true;
+			continue;
+		}
+		out.push_back(e);
+	}
+	if (!removed) return true;
+
+	// If empty, delete the value
+	if (out.empty()) {
+		HKEY hKey = NULL;
+		LONG r = RegOpenKeyExW(HKEY_LOCAL_MACHINE, REG_PERSIST_SUBKEY, 0, KEY_SET_VALUE, &hKey);
+		if (r == ERROR_SUCCESS) {
+			RegDeleteValueW(hKey, INSTANT_HOOK_LIST_NAME);
+			RegCloseKey(hKey);
+		}
+		return true;
+	}
+
+	return WriteInstantHookList(out);
+}
+
+bool RegistryStore::HasInstantHookEntry(unsigned long long processFnvHash) {
+	std::vector<std::tuple<unsigned long long, unsigned long long, std::wstring>> entries;
+	if (!ReadInstantHookList(entries)) return false;
+	for (auto &e : entries) {
+		if (std::get<0>(e) == processFnvHash) return true;
+	}
+	return false;
 }

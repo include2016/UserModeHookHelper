@@ -13,13 +13,13 @@
 #include "../../drivers/UserModeHookHelper/UKShared.h"
 #include "detours/detours.h"
 #include "capstone/capstone.h"
-
+typedef PVOID(*PFNGetRdi)();
+PFNGetRdi pGetRdi;
 VOID CopyCharToWchar(WCHAR* dst, CHAR* src, SIZE_T len) {
 	for (size_t i = 0; i < len && src[i]!=0xd && src[i]!=0xa; i++) {
 		*((CHAR*)dst + i * sizeof(WCHAR)) = src[i];
 	}
 }
-extern "C" PVOID GetRdi();
 static PVOID GetProcessHeapFromPEB() {
 #if defined(_WIN64)
 	return (PVOID)*(ULONG_PTR*)((ULONG_PTR)__readgsqword(0x60) + 0x30);
@@ -753,9 +753,6 @@ OnProcessAttach(
 	_In_ PVOID ModuleHandle
 )
 {
-
-
-
 	// add dll reference, so we can be unloaded by calling freelibrary
 	LdrAddRefDll(LDR_ADDREF_DLL_PIN, ModuleHandle);
 
@@ -940,11 +937,13 @@ OnProcessAttach(
 		// first check if dealy_hook.hash exist, we can reuse CheckSignalFile, only change format
 		if (CheckSignalFile((UCHAR*)ntPath, len, DELAY_HOOK_SIGNAL_FILE_FMT, TRUE)) {
 			// write place holder function to GetRdi code: mov rax, rdi; ret
-			{
+			{ 
+				// DbgBreakPoint();
 				PVOID function_addr = &GetRdi;
 #ifdef _DEBUG
 				function_addr = (PVOID)(DWORD64)(*(DWORD*)((DWORD64)function_addr + 1) + (DWORD64)function_addr + 5);
 #endif
+				pGetRdi = (PFNGetRdi)function_addr;
 				// align down, a page is 4KB
 				PVOID page_base = (PVOID)((DWORD64)function_addr & (~0xFFF));
 				DWORD oldProt = 0;
@@ -1046,7 +1045,7 @@ OnProcessAttach(
 													WCHAR* volumeNumStart = processPath + 22;
 													ULONG volumeNum = 0;
 													WCHAR* p = volumeNumStart;
-													// DbgBreakPoint();
+													// // DbgBreakPoint();
 													while (*p >= L'0' && *p <= L'9') {
 														volumeNum = volumeNum * 10 + (*p - L'0');
 														p++;
@@ -1122,7 +1121,7 @@ OnProcessAttach(
 			{
 				DWORD oldProt = 0;
 				SIZE_T protLen = 0x1000;
-				DWORD trampSize = 128;
+				DWORD trampSize = 128;  // ← Move here (outside inner block)
 
 				PVOID page_base = (PVOID)((DWORD64)hookAddr & (~0xFFF));
 
@@ -1135,7 +1134,7 @@ OnProcessAttach(
 				if (!ok) {
 					SIZE_T z = 0;
 					NtFreeVirtualMemory(NtCurrentProcess(), &tramp, (PSIZE_T)&trampSize, MEM_RELEASE);
-					return false;
+					return STATUS_UNSUCCESSFUL;  // Also fix return type
 				}
 				break;
 			}
@@ -1203,6 +1202,8 @@ NtDllMain(
 	return TRUE;
 }
 
+
+
 BOOL APIENTRY DllMain(HMODULE hModule,
 	DWORD  ul_reason_for_call,
 	LPVOID lpReserved
@@ -1232,8 +1233,6 @@ BOOL APIENTRY DllMain(HMODULE hModule,
 
 	return TRUE;
 }
-
-
 BOOLEAN CheckSignalFile(UCHAR* ntPath, size_t len, const wchar_t* format, BOOLEAN caseInsensitive) {
 	const DWORD64 FNV_prime = 1099511628211ULL;
 	DWORD64 hash = 14695981039346656037ULL;
@@ -1781,6 +1780,28 @@ static BOOL ScanDelayHookFiles(const WCHAR* ntPath, size_t byteLen) {
 		const wchar_t* p = module;
 		while (*p++) fileNameLen++;
 
+		// Remove .dll suffix if present
+		const wchar_t* dllSuffix = L".dll";
+		const size_t suffixLen = 4;
+		if (fileNameLen > suffixLen) {
+			// Check if ends with .dll (case insensitive)
+			bool hasDllSuffix = true;
+			for (size_t i = 0; i < suffixLen; i++) {
+				wchar_t c1 = module[fileNameLen - suffixLen + i];
+				wchar_t c2 = dllSuffix[i];
+				// Convert to lowercase for comparison
+				if (c1 >= L'A' && c1 <= L'Z') c1 = c1 + (L'a' - L'A');
+				if (c2 >= L'A' && c2 <= L'Z') c2 = c2 + (L'a' - L'A');
+				if (c1 != c2) {
+					hasDllSuffix = false;
+					break;
+				}
+			}
+			if (hasDllSuffix) {
+				fileNameLen -= suffixLen;
+			}
+		}
+
 		// calculate dllFnvHash
 		unsigned long long dllFnvHash = ComputeFnvHash(module, fileNameLen);
 
@@ -1827,12 +1848,40 @@ static BOOL ScanDelayHookFiles(const WCHAR* ntPath, size_t byteLen) {
 }
 
 void __fastcall LdrLoadDll_HookHandler(PVOID rcx, PVOID rdx, PVOID r8, PVOID r9, PVOID rsp) {
+	// DbgBreakPoint();
 	// rcx = PUNICODE_STRING DllName (LdrLoadDll 第一个参数 DllName)
-	PUNICODE_STRING fullDllName = (PUNICODE_STRING)*(DWORD64*)(GetRdi());
+	PUNICODE_STRING fullDllName = NULL; 
+#ifdef _DEBUG
+	fullDllName = (PUNICODE_STRING)*(DWORD64*)pGetRdi();
+#else
+	fullDllName = (PUNICODE_STRING)pGetRdi();
+#endif
+	// EtwLog(L"Dll=%s is loaded\n", fullDllName->Buffer);
 	if (fullDllName && fullDllName->Buffer && fullDllName->Length > 0) {
 		// DllName 本身就是文件名（如 ntdll.dll），不需要提取路径
 		USHORT charCount = fullDllName->Length / sizeof(WCHAR);
-		unsigned long long dllFnvHash = ComputeFnvHash(fullDllName->Buffer, charCount);
+
+			// Remove .dll suffix before computing hash
+			USHORT hashCharCount = charCount;
+			if (charCount > 4) {
+				// Check if ends with .dll (case insensitive)
+				bool hasDllSuffix = true;
+				for (int i = 0; i < 4; i++) {
+					WCHAR c = fullDllName->Buffer[charCount - 4 + i];
+					// Convert to lowercase
+					if (c >= L'A' && c <= L'Z') c = c + (L'a' - L'A');
+					WCHAR expected = L".dll"[i];
+					if (c != expected) {
+						hasDllSuffix = false;
+						break;
+					}
+				}
+				if (hasDllSuffix) {
+					hashCharCount -= 4;
+				}
+			}
+
+		unsigned long long dllFnvHash = ComputeFnvHash(fullDllName->Buffer, hashCharCount);
 
 		// Traverse InstantHook list
 		InstantHookTarget** ppNode = &g_InstantHookList;
@@ -1845,8 +1894,33 @@ void __fastcall LdrLoadDll_HookHandler(PVOID rcx, PVOID rdx, PVOID r8, PVOID r9,
 				targetUs.Length = node->targetDllNameLen * sizeof(WCHAR);
 				targetUs.MaximumLength = targetUs.Length;
 
-				if (RtlCompareUnicodeString(fullDllName, &targetUs, TRUE) == 0) {
-					// DbgBreakPoint();
+
+					// Remove .dll suffix from fullDllName for comparison
+					UNICODE_STRING compareUs;
+					compareUs.Buffer = fullDllName->Buffer;
+					compareUs.Length = fullDllName->Length;
+					compareUs.MaximumLength = fullDllName->MaximumLength;
+
+					// Check if ends with .dll and adjust length
+					if (fullDllName->Length > 8) { // More than 4 WCHARs
+						USHORT charCount = fullDllName->Length / sizeof(WCHAR);
+						bool hasDllSuffix = true;
+						for (int i = 0; i < 4; i++) {
+							WCHAR c = fullDllName->Buffer[charCount - 4 + i];
+							if (c >= L'A' && c <= L'Z') c = c + (L'a' - L'A');
+							WCHAR expected = L".dll"[i];
+							if (c != expected) {
+								hasDllSuffix = false;
+								break;
+							}
+						}
+						if (hasDllSuffix) {
+							compareUs.Length -= 8; // Remove 4 WCHARs = 8 bytes
+						}
+					}
+
+				if (RtlCompareUnicodeString(&compareUs, &targetUs, TRUE) == 0) {
+					// // DbgBreakPoint();
 
 					// Get current process path and calculate processFnvHash
 					ULONG returnLength = 0;
