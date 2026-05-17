@@ -168,7 +168,7 @@ namespace HookCore {
 				if (services) services->LogCore(L"ApplyHook: InjectTrampoline result: %s.\n", signaled ? L"success" : L"failure");
 				if (signaled) {
 					// Poll up to 5 seconds (50 * 100ms) for trampoline module presence.
-					const int maxIterations = 50; bool loaded = false;
+					const int maxIterations = 5; bool loaded = false;
 					for (int iter = 0; iter < maxIterations && !loaded; ++iter) {
 						//  GetModuleBase(bool is64, HANDLE hProc, wchar_t* target_module, DWORD64* base) = 0;
 						services->GetModuleBase( pid, trampName.c_str(), (DWORD64*)&trampoline_dll_base);

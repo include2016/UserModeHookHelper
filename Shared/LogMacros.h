@@ -26,4 +26,4 @@
 #endif
 
 
-#define LOG_CTRL_INSHOOK(fmt, ...) app.GetETW().Log(L"[UMCtrl]     [InstantHook]" fmt, __VA_ARGS__)
+#define LOG_CTRL_INSHOOK(fmt, ...) app.GetETW().Log(L"[UMCtrl]     [InstantHook] " fmt, __VA_ARGS__)

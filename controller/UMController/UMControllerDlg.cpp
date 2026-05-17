@@ -2038,11 +2038,8 @@ void CUMControllerDlg::OnSetInstantHook()
 		t.targetPid = pid;
 		t.processNtPath = ntPath;
 		t.processFnvHash = processFnvHash;
-		// Extract filename from dllPath for FNV hash
-		const wchar_t* fileName = wcsrchr(t.dllPath.c_str(), L'\\');
-		if (fileName) fileName++;
-		else fileName = t.dllPath.c_str();
-		t.dllFnvHash = InstantHookManager::ComputeFnvHash(fileName);
+		
+		t.dllFnvHash = InstantHookManager::ComputeFnvHash(t.module.c_str());
 		m_InstantHookMgr->AddTarget(t);
 	}
 

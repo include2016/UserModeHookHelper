@@ -8,6 +8,23 @@
 #include "../../Shared/LogMacros.h"
 #include "UMController.h"
 
+// Helper: create event with security attributes allowing all processes to signal/sync
+static HANDLE CreateWorldAccessibleEventW(BOOL bManualReset, BOOL bInitialState, PCWSTR name) {
+    SECURITY_DESCRIPTOR sd;
+    InitializeSecurityDescriptor(&sd, SECURITY_DESCRIPTOR_REVISION);
+    // Allow everyone access (SYNC | EVENT_MODIFY_STATE | READ_CONTROL)
+    if (!SetSecurityDescriptorDacl(&sd, TRUE, (PACL)NULL, FALSE)) {
+        return NULL;
+    }
+
+    SECURITY_ATTRIBUTES sa;
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = FALSE;
+    sa.lpSecurityDescriptor = &sd;
+
+    return CreateEventW(&sa, bManualReset, bInitialState, name);
+}
+
 // Helper: parse hex address string like "0x418b4" or "418b4"
 static DWORD64 ParseAddressText(const wchar_t* input, bool& ok) {
 	ok = false;
@@ -73,22 +90,24 @@ void InstantHookManager::ListenerThreadImpl(ListenerContext* ctx) {
     // construct and create event
     WCHAR loadEventName[MAX_PATH];
     WCHAR hookEventName[MAX_PATH];
-    swprintf_s(loadEventName, LOAD_NOTIFY_EVENT_FMT, ctx->target.processFnvHash, ctx->target.dllFnvHash);
-    swprintf_s(hookEventName, HOOK_NOTIFY_EVENT_FMT, ctx->target.processFnvHash, ctx->target.dllFnvHash);
+    swprintf_s(loadEventName, UM_LOAD_NOTIFY_EVENT_FMT, ctx->target.processFnvHash, ctx->target.dllFnvHash);
+    swprintf_s(hookEventName, UM_HOOK_NOTIFY_EVENT_FMT, ctx->target.processFnvHash, ctx->target.dllFnvHash);
 
-    ctx->hLoadNotify = OpenEventW(SYNCHRONIZE, FALSE, loadEventName);
+    ctx->hLoadNotify = CreateWorldAccessibleEventW(FALSE, FALSE, loadEventName);
     if (!ctx->hLoadNotify) {
+		LOG_CTRL_INSHOOK(L"failed to create event=%s, Eorr=0x%x\n", loadEventName, GetLastError());
         return;
     }
-    ctx->hHookNotify = OpenEventW(EVENT_MODIFY_STATE, FALSE, hookEventName);
+    ctx->hHookNotify = CreateWorldAccessibleEventW(TRUE, FALSE, hookEventName);
     if (!ctx->hHookNotify) {
+		LOG_CTRL_INSHOOK(L"failed to create event=%s, Eorr=0x%x\n", hookEventName, GetLastError());
         CloseHandle(ctx->hLoadNotify);
         ctx->hLoadNotify = NULL;
         return;
     }
 
     // wait for LoadNotify event
-    DWORD waitResult = WaitForSingleObject(ctx->hLoadNotify, INFINITE);
+	DWORD waitResult = WaitForSingleObject(ctx->hLoadNotify, INFINITE);
     if (waitResult != WAIT_OBJECT_0) {
         CloseHandle(ctx->hLoadNotify);
         CloseHandle(ctx->hHookNotify);
@@ -96,7 +115,23 @@ void InstantHookManager::ListenerThreadImpl(ListenerContext* ctx) {
     }
 
     // target dll is already loaded, we can apply hook now
-    DWORD pid = ctx->target.targetPid;
+
+	DWORD pid = 0;
+    // Read hook event file to get PID
+    WCHAR hookEventPath[MAX_PATH];
+    swprintf_s(hookEventPath, L"C:\\users\\public\\hookevent.%016llx.%016llx",
+        ctx->target.processFnvHash, ctx->target.dllFnvHash);
+
+    FILE* hookEventFile = NULL;
+    _wfopen_s(&hookEventFile, hookEventPath, L"rt");
+    if (hookEventFile) {
+        if (fscanf_s(hookEventFile, "%u", &pid) == 1) {
+            LOG_CTRL_INSHOOK(L"Hook event file: PID=%u, processHash=%llu, dllHash=%llu\n",
+				pid, ctx->target.processFnvHash, ctx->target.dllFnvHash);
+        }
+        fclose(hookEventFile);
+    }
+
 
     // inject hook code DLL
     if (!m_services->InjectTrampoline(pid, ctx->target.dllPath.c_str())) {
@@ -112,8 +147,17 @@ void InstantHookManager::ListenerThreadImpl(ListenerContext* ctx) {
     // wait for hook dll to load
     DWORD64 hookDllBase = 0;
     int retries = 50; // 5 seconds max
+
+    // Extract filename from dllPath
+    const wchar_t* dllFileName = wcsrchr(ctx->target.dllPath.c_str(), L'\\');
+    if (dllFileName) {
+        dllFileName++; // Skip the backslash
+    } else {
+        dllFileName = ctx->target.dllPath.c_str(); // Use full path if no backslash
+    }
+
     while (retries-- > 0) {
-        if (m_services->GetModuleBase(pid, ctx->target.dllPath.c_str(), &hookDllBase) && hookDllBase != 0) {
+        if (m_services->GetModuleBase(pid, dllFileName, &hookDllBase) && hookDllBase != 0) {
             break;
         }
         Sleep(100);
@@ -193,7 +237,7 @@ void InstantHookManager::ListenerThreadImpl(ListenerContext* ctx) {
     PVOID oriAsmAddr = nullptr;
     DWORD64 targetAddress = moduleBase + offset;
     DWORD64 hookFunctionAddress = hookDllBase + hookCodeOffset;
-
+	HookCore::SetHookServices(m_services);
     if (!HookCore::ApplyHook(pid, targetAddress, m_services, hookFunctionAddress, hookId, &oriLen, &trampoline, &oriAsmAddr)) {
         // release hook ID
         _bittestandreset((LONG*)&g_HookIdBitfield[hookId / 64], hookId % 64);
@@ -259,7 +303,7 @@ bool InstantHookManager::ParseHookSeqFile(const wchar_t* filePath, std::vector<H
             hasModule = true;
         }
         else if (wcscmp(key, L"offset") == 0) {
-			target.offset = val;
+			target.offset = std::wstring(val);
             hasOffset = true;
         }
         else if (wcscmp(key, L"dllPath") == 0) {
@@ -283,10 +327,16 @@ bool InstantHookManager::ParseHookSeqFile(const wchar_t* filePath, std::vector<H
 unsigned long long InstantHookManager::ComputeFnvHash(const wchar_t* str) {
     const unsigned long long FNV_prime = 1099511628211ULL;
     unsigned long long hash = 14695981039346656037ULL;
-    const BYTE* bytes = (const BYTE*)str;
-    size_t len = wcslen(str) * sizeof(wchar_t);
-    for (size_t i = 0; i < len; i++) {
-        hash ^= (unsigned long long)bytes[i];
+    const wchar_t* p = str;
+    while (*p) {
+        wchar_t c = *p++;
+        // convert to lowercase
+        if (c >= L'A' && c <= L'Z') c = c + (L'a' - L'A');
+        BYTE bLow = (BYTE)(c & 0xFF);
+        BYTE bHigh = (BYTE)((c >> 8) & 0xFF);
+        hash ^= (unsigned long long)bLow;
+        hash *= FNV_prime;
+        hash ^= (unsigned long long)bHigh;
         hash *= FNV_prime;
     }
     return hash;

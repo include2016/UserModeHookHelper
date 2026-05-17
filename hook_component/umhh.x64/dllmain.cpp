@@ -10,11 +10,12 @@
 #include "../controller/UMController/IPC.h"
 #include "../controller/UMController/ETW.h"
 #include "../../Shared/SharedMacroDef.h"
+#include "../../drivers/UserModeHookHelper/UKShared.h"
 #include "detours/detours.h"
 #include "capstone/capstone.h"
 
 VOID CopyCharToWchar(WCHAR* dst, CHAR* src, SIZE_T len) {
-	for (size_t i = 0; i < len; i++) {
+	for (size_t i = 0; i < len && src[i]!=0xd && src[i]!=0xa; i++) {
 		*((CHAR*)dst + i * sizeof(WCHAR)) = src[i];
 	}
 }
@@ -34,14 +35,70 @@ static bool WriteJump(PVOID addr, PVOID target);
 // InstantHook target list (for delay hook feature)
 struct InstantHookTarget {
 	wchar_t targetDllName[MAX_PATH];        // target dll name
-	USHORT targetDllNameLen;                 
+	USHORT targetDllNameLen;
 	unsigned long long dllFnvHash;           // FNV hash of target dll name
 	HANDLE hLoadNotifyEvent;                // LoadNotify.<pFnv>.<dllFnv>
 	HANDLE hHookNotifyEvent;                // HookNotify.<pFnv>.<dllFnv>
+	wchar_t dllPath[MAX_PATH];              // hook code dll path
 	InstantHookTarget* next;
 };
 static InstantHookTarget* g_InstantHookList = nullptr;
 static BOOL ScanDelayHookFiles(const WCHAR* ntPath, size_t byteLen);
+
+// Find suitable hook offset for LdrLoadDll
+// Reads 0x1000 bytes from ldrLoadDllAddr, uses capstone to decode,
+// finds RET instruction, records first 5 instructions, then returns
+// the offset of the first instruction where (instr_addr - ret_addr) >= MIN_HOOK_BYTES
+static DWORD FindHookOffset(PVOID ldrLoadDllAddr) {
+	BYTE codeBuf[0x1000] = { 0 };
+	SIZE_T bytesRead = 0;
+	NTSTATUS status = NtReadVirtualMemory(NtCurrentProcess(), ldrLoadDllAddr, codeBuf, sizeof(codeBuf), &bytesRead);
+	if (!NT_SUCCESS(status) || bytesRead < MIN_HOOK_BYTES) {
+		return 0;
+	}
+
+	csh handle;
+	if (cs_open(CS_ARCH_X86, CS_MODE_64, &handle) != CS_ERR_OK) {
+		return 0;
+	}
+
+	cs_insn* ins = cs_malloc(handle);
+	uint64_t rip = (uint64_t)ldrLoadDllAddr;
+	const uint8_t* code_ptr = codeBuf;
+	size_t remaining = bytesRead;
+
+	// Record first 5 instructions
+	uint64_t firstFiveAddrs[5] = { 0 };
+	int firstFiveCount = 0;
+
+	uint64_t retAddr = 0;
+	while (cs_disasm_iter(handle, &code_ptr, &remaining, &rip, ins)) {
+		 
+		// Check for RET instruction
+		if (ins->id == X86_INS_RET) {
+			retAddr = ins->address;
+			break;
+		}
+		firstFiveAddrs[firstFiveCount%5] = ins->address;
+		firstFiveCount++;
+	}
+
+	if (retAddr == 0) {
+		cs_free(ins, 1);
+		cs_close(&handle);
+		return 0;
+	}
+
+	for (size_t i = firstFiveCount-1,j=0; j<5; j++,i--) {
+		if (retAddr - firstFiveAddrs[i % 5] >= MIN_HOOK_BYTES)
+			return (DWORD)(firstFiveAddrs[i % 5] - (DWORD64)ldrLoadDllAddr);
+	}
+
+	cs_free(ins, 1);
+	cs_close(&handle);
+	return 0;
+}
+
 // This is necessary for x86 builds because of SEH,
 // which is used by Detours.  Look at loadcfg.c file
 // in Visual Studio's CRT source codes for the original
@@ -191,7 +248,7 @@ typedef NTSTATUS(NTAPI *PFN_NtQueryInformationProcess)(
 	PULONG
 	);
 BOOLEAN GetNtPathOfCurrentProcess(HANDLE NtdllHandle, wchar_t* ntPath, size_t* outLen);
-BOOLEAN CheckSignalFile(UCHAR* ntPath, size_t len, const wchar_t* format);
+BOOLEAN CheckSignalFile(UCHAR* ntPath, size_t len, const wchar_t* format, BOOLEAN caseInsensitive);
 //
 // Include support for ETW logging.
 // Note that following functions are mocked, because they're
@@ -698,6 +755,7 @@ OnProcessAttach(
 {
 
 
+
 	// add dll reference, so we can be unloaded by calling freelibrary
 	LdrAddRefDll(LDR_ADDREF_DLL_PIN, ModuleHandle);
 
@@ -851,7 +909,7 @@ OnProcessAttach(
 	size_t len = 0;
 	GetNtPathOfCurrentProcess(NtdllHandle, ntPath, &len);
 	// get hash and check
-	if (CheckSignalFile((UCHAR*)ntPath, len, EARLY_BREAK_SIGNAL_FILE_FMT)) {
+	if (CheckSignalFile((UCHAR*)ntPath, len, EARLY_BREAK_SIGNAL_FILE_FMT, TRUE)) {
 		EtwLog(L"current process is marked as early break, now breaking into debugger\n");
 
 		// put it into sleep using Detours at PE entry
@@ -870,18 +928,19 @@ OnProcessAttach(
 		}
 	}
 
+	
 	// for now we only support x64
 #ifdef _WIN64
 
 	 // we need to hook ldrloaddll before ret and get unicode string from rdi
 	 // we can use capstone to locate ret instruction and search back to get enough space to write
 	 // trampoline code
-	while (1) {
+	do {
+		// DbgBreakPoint();
 		// first check if dealy_hook.hash exist, we can reuse CheckSignalFile, only change format
-		if (CheckSignalFile((UCHAR*)ntPath, len, DELAY_HOOK_SIGNAL_FILE_FMT)) {
+		if (CheckSignalFile((UCHAR*)ntPath, len, DELAY_HOOK_SIGNAL_FILE_FMT, TRUE)) {
 			// write place holder function to GetRdi code: mov rax, rdi; ret
 			{
-				DbgBreakPoint();
 				PVOID function_addr = &GetRdi;
 #ifdef _DEBUG
 				function_addr = (PVOID)(DWORD64)(*(DWORD*)((DWORD64)function_addr + 1) + (DWORD64)function_addr + 5);
@@ -898,45 +957,163 @@ OnProcessAttach(
 				}
 				UCHAR code[4] = { 0x48, 0x89, 0xF8, 0xC3 };
 				NtWriteVirtualMemory(NtCurrentProcess(), function_addr, (PVOID)code, 4, (PSIZE_T)&written);
-				// if ((0==NtWriteVirtualMemory(NtCurrentProcess(), function_addr, (PVOID)code, 4, (PSIZE_T)&written))
-				// 	&& written == 4) {
-				// 	EtwLog(L"GetRdi patch succeed\n");
-				// }
-				// else {
-				// 	EtwLog(L"File to patch GetRdi, target=0x%p, Error=0x%x\n", function_addr, RtlGetLastWin32Error());
-				// 	break;
-				// }
+
 				DWORD tmp;
 				NtProtectVirtualMemory(NtCurrentProcess(), &page_base, &protLen, oldProt, &tmp);
 			}
-
 			// we already have LdrLoadDll function address: pLdrLoadDll
 			DWORD hook_offset = 0;
 			// read config file get offset based on ntdll FNV-1a hash
 			WCHAR fnvStr[17] = { 0 };
-			if (GetNtdllFnvHash(fnvStr, 17)) {
-				if (!GetHookOffsetFromConfig(fnvStr, &hook_offset)) {
-					EtwLog(L"FNV %s not found in config\n", fnvStr);
-					break;
-				}
-			}
-			else {
-				EtwLog(L"failed to get ntdll FNV hash\n");
-				break;
-			}
+			// there is no need to get offset from config file now, I can get by using capstone
+			// if (GetNtdllFnvHash(fnvStr, 17)) {
+			// 	if (!GetHookOffsetFromConfig(fnvStr, &hook_offset)) {
+			// 		EtwLog(L"FNV %s not found in config\n", fnvStr);
+			// 		break;
+			// 	}
+			// }
+			// else {
+			// 	EtwLog(L"failed to get ntdll FNV hash\n");
+			// 	break;
+			// }
 
 			// Scan delay.hook files and build InstantHook list
 			if (!ScanDelayHookFiles(ntPath, len)) {
 				EtwLog(L"ScanDelayHookFiles failed\n");
+				break;
 			}
 
 			// Install LdrLoadDll hook if we have InstantHook targets
 			if (g_InstantHookList == nullptr)
 				break;
+				// Inject trampoline.dll
+				{
+					// Read UMController PID from file
+					ULONG umcontrollerPid = 0;
+					FILE* f = NULL;
+					_wfopen_s(&f, UMCONTROLLER_PID_FILE, L"r");
+					if (f) {
+						fscanf_s(f, "%u", &umcontrollerPid);
+						fclose(f);
+					}
+
+					if (umcontrollerPid != 0) {
+						// Open UMController process
+						HANDLE hProcess = NULL;
+						OBJECT_ATTRIBUTES oa;
+						CLIENT_ID cid;
+						cid.UniqueProcess = (PVOID)(ULONG_PTR)umcontrollerPid;
+						cid.UniqueThread = NULL;
+
+						InitializeObjectAttributes(&oa, NULL, 0, NULL, NULL);
+						NTSTATUS status = NtOpenProcess(&hProcess, PROCESS_QUERY_INFORMATION, &oa, &cid);
+
+						if (NT_SUCCESS(status)) {
+							// Get UMController process image path
+							ULONG returnLength = 0;
+							PBYTE buff[MAX_PATH * 4] = { 0 };
+							status = NtQueryInformationProcess(
+								hProcess,
+								ProcessImageFileName,
+								buff,
+								MAX_PATH * 4,
+								&returnLength
+							);
+
+							if (NT_SUCCESS(status)) {
+								UNICODE_STRING* us = (UNICODE_STRING*)buff;
+								WCHAR processPath[MAX_PATH];
+								RtlZeroMemory(processPath, sizeof(processPath));
+
+								// Copy process path
+								ULONG pathLen = us->Length / sizeof(WCHAR);
+								if (pathLen < MAX_PATH) {
+									RtlCopyMemory(processPath, us->Buffer, us->Length);
+
+											// Extract directory from process path
+											WCHAR* lastSlash = wcsrchr(processPath, L'\\');
+											if (lastSlash) {
+												*(lastSlash + 1) = L'\0';
+
+												// Convert NT path to DOS path format
+												// NT path: \Device\HarddiskVolume2\path
+												// DOS path: \??\C:\path
+												WCHAR dosPath[MAX_PATH];
+												RtlZeroMemory(dosPath, sizeof(dosPath));
+
+												if (wcsncmp(processPath, L"\\Device\\HarddiskVolume", 22) == 0) {
+													// Find volume number
+													WCHAR* volumeNumStart = processPath + 22;
+													ULONG volumeNum = 0;
+													WCHAR* p = volumeNumStart;
+													// DbgBreakPoint();
+													while (*p >= L'0' && *p <= L'9') {
+														volumeNum = volumeNum * 10 + (*p - L'0');
+														p++;
+													}
+													// Simple mapping: volume 2 = C, volume 3 = D, etc.
+													WCHAR driveLetter = (WCHAR)(L'C' + (volumeNum > 1 ? volumeNum - 2 : 0));
+
+													// Find the path part after the volume number
+													WCHAR* pathPart = p;
+
+													// Build DOS path: \??\C:\path
+													swprintf_s(dosPath, L"%c:%s", driveLetter, volumeNumStart+1);
+												}
+
+												// Append trampoline DLL name
+												WCHAR trampDllPath[MAX_PATH];
+												swprintf_s(trampDllPath, L"%s%s", dosPath, TRAMP_X64_DLL);
+
+												// Load trampoline.dll
+												UNICODE_STRING trampPathUs;
+												RtlInitUnicodeString(&trampPathUs, trampDllPath);
+												HANDLE hTramp = NULL;
+												ULONG flags = 0;
+												NTSTATUS trampStatus = pLdrLoadDll(NULL, &flags, &trampPathUs, &hTramp);
+												if (!NT_SUCCESS(trampStatus)) {
+													EtwLog(L"Failed to load trampoline.dll: %s, status=0x%x\n", trampDllPath, trampStatus);
+												} else {
+													EtwLog(L"Successfully loaded trampoline.dll: %s\n", trampDllPath);
+												}
+											}
+						}
+							}
+							NtClose(hProcess);
+						}
+					}
+				}
+
+
+
+			// Load all hook code DLLs
+			InstantHookTarget* pNode = g_InstantHookList;
+			while (pNode) {
+				UNICODE_STRING dllPathUs;
+				RtlInitUnicodeString(&dllPathUs, pNode->dllPath);
+				HANDLE hModule = NULL;
+				ULONG flags = 0;
+				NTSTATUS loadStatus = pLdrLoadDll(NULL, &flags, &dllPathUs, &hModule);
+				if (!NT_SUCCESS(loadStatus)) {
+					EtwLog(L"Failed to load hook code dll: %s, status=0x%x\n", pNode->dllPath, loadStatus);
+				}
+				pNode = pNode->next;
+			}
+
+			{
+				// get hook offset by using capstone
+				hook_offset = FindHookOffset(pLdrLoadDll);
+				if (hook_offset == 0) {
+					EtwLog(L"FindHookOffset failed\n");
+					break;
+				}
+				EtwLog(L"FindHookOffset returned offset=0x%x\n", hook_offset);
+			}
+
 
 			DWORD oriLen = 0;
 			PVOID tramp = nullptr;
-			PVOID hookAddr = (PVOID)((uintptr_t)NtdllHandle + hook_offset);
+			PVOID hookAddr = (PVOID)((uintptr_t)pLdrLoadDll + hook_offset);
 			if (!ApplyLocalHook(hookAddr, (PVOID)LdrLoadDll_HookHandler, &tramp, &oriLen)) {
 				EtwLog(L"NTDLL ApplyLocalHook failed\n");
 				break;
@@ -944,22 +1121,26 @@ OnProcessAttach(
 			// try install hook
 			{
 				DWORD oldProt = 0;
-				SIZE_T protLen = MIN_HOOK_BYTES;
+				SIZE_T protLen = 0x1000;
 				DWORD trampSize = 128;
-				NtProtectVirtualMemory(NtCurrentProcess(), &hookAddr, &protLen, PAGE_EXECUTE_READWRITE, &oldProt);
 
-				bool ok = WriteJump((PVOID)((uintptr_t)NtdllHandle + hook_offset), tramp);
+				PVOID page_base = (PVOID)((DWORD64)hookAddr & (~0xFFF));
+
+				NtProtectVirtualMemory(NtCurrentProcess(), &page_base, &protLen, PAGE_EXECUTE_READWRITE, &oldProt);
+
+				bool ok = WriteJump(hookAddr, tramp);
 				DWORD tmp;
-				NtProtectVirtualMemory(NtCurrentProcess(), &hookAddr, &protLen, oldProt, &tmp);
+				NtProtectVirtualMemory(NtCurrentProcess(), &page_base, &protLen, oldProt, &tmp);
 
 				if (!ok) {
 					SIZE_T z = 0;
 					NtFreeVirtualMemory(NtCurrentProcess(), &tramp, (PSIZE_T)&trampSize, MEM_RELEASE);
 					return false;
 				}
+				break;
 			}
 		}
-	}
+	} while (false);
 
 #endif
 	RtlCreateUserThread(NtCurrentProcess(),
@@ -1053,7 +1234,7 @@ BOOL APIENTRY DllMain(HMODULE hModule,
 }
 
 
-BOOLEAN CheckSignalFile(UCHAR* ntPath, size_t len, const wchar_t* format) {
+BOOLEAN CheckSignalFile(UCHAR* ntPath, size_t len, const wchar_t* format, BOOLEAN caseInsensitive) {
 	const DWORD64 FNV_prime = 1099511628211ULL;
 	DWORD64 hash = 14695981039346656037ULL;
 
@@ -1063,7 +1244,12 @@ BOOLEAN CheckSignalFile(UCHAR* ntPath, size_t len, const wchar_t* format) {
 	const UCHAR* p = ntPath;
 	const UCHAR* end = ntPath + len;
 	while (p < end) {
-		hash ^= (DWORD64)(*p);
+		UCHAR byte = *p;
+		// If case insensitive, convert to lowercase before hashing
+		if (caseInsensitive && byte >= 'A' && byte <= 'Z') {
+			byte = byte + ('a' - 'A');
+		}
+		hash ^= (DWORD64)byte;
 		hash *= FNV_prime;
 		++p;
 	}
@@ -1426,23 +1612,68 @@ static BOOL GetHookOffsetFromConfig(const WCHAR* fnvHash, DWORD* outOffset) {
 	return FALSE;
 }
 
-// 计算字符串的 FNV-1a hash（不使用 CRT wcslen）
+// 计算字符串的 FNV-1a hash（不使用 CRT wcslen），按小写计算
 static unsigned long long ComputeFnvHash(const WCHAR* str, USHORT charCount) {
 	const DWORD64 FNV_prime = 1099511628211ULL;
 	DWORD64 hash = 14695981039346656037ULL;
-	const BYTE* bytes = (const BYTE*)str;
-	size_t len = charCount * sizeof(WCHAR); // charCount 个 wchar_t 的字节数
-	for (size_t i = 0; i < len; i++) {
-		hash ^= (DWORD64)bytes[i];
+	for (USHORT i = 0; i < charCount; i++) {
+		WCHAR c = str[i];
+		// convert to lowercase
+		if (c >= L'A' && c <= L'Z') c = c + (L'a' - L'A');
+		BYTE bLow = (BYTE)(c & 0xFF);
+		BYTE bHigh = (BYTE)((c >> 8) & 0xFF);
+		hash ^= (DWORD64)bLow;
+		hash *= FNV_prime;
+		hash ^= (DWORD64)bHigh;
 		hash *= FNV_prime;
 	}
 	return hash;
 }
 
-// 扫描 C:\users\public\delay.hook.* 文件，匹配当前进程的 FNV hash
-// ntPath 和 byteLen 由调用者传入，避免重复调用 GetNtPathOfCurrentProcess
+// Write current PID to hook event file
+static VOID WriteHookEventFile(unsigned long long processFnvHash, unsigned long long dllFnvHash) {
+	WCHAR hookEventPath[MAX_PATH];
+	UNICODE_STRING hookEventPathUs;
+	OBJECT_ATTRIBUTES oaFile;
+	IO_STATUS_BLOCK iosb;
+	HANDLE hFile = NULL;
+	LARGE_INTEGER byteOffset = { 0 };
+
+	// Get current PID
+	ULONG pid = (ULONG)(ULONG_PTR)NtCurrentProcessId();
+
+	// Build path: \??\C:\users\public\hookevent.{processFnvHash}.{dllFnvHash}
+	swprintf_s(hookEventPath, L"\\??\\C:\\users\\public\\hookevent.%016llx.%016llx", processFnvHash, dllFnvHash);
+
+	// Initialize unicode string and object attributes
+	RtlInitUnicodeString(&hookEventPathUs, hookEventPath);
+	InitializeObjectAttributes(&oaFile, &hookEventPathUs, OBJ_CASE_INSENSITIVE, NULL, NULL);
+
+	// Create/open file
+	NTSTATUS status = NtCreateFile(&hFile,
+		FILE_GENERIC_WRITE | SYNCHRONIZE,
+		&oaFile,
+		&iosb,
+		NULL,
+		FILE_ATTRIBUTE_NORMAL,
+		0,
+		FILE_OVERWRITE_IF,
+		FILE_SYNCHRONOUS_IO_NONALERT,
+		NULL,
+		0);
+
+	if (NT_SUCCESS(status)) {
+		// Convert PID to string
+		char pidBuf[32];
+		int pidLen = sprintf_s(pidBuf, "%u", pid);
+
+		// Write PID to file
+		NtWriteFile(hFile, NULL, NULL, NULL, &iosb, pidBuf, pidLen, &byteOffset, NULL);
+		NtClose(hFile);
+	}
+}
+
 static BOOL ScanDelayHookFiles(const WCHAR* ntPath, size_t byteLen) {
-	// 计算当前进程路径的 FNV-1a hash
 	unsigned long long processFnvHash = ComputeFnvHash(ntPath, (USHORT)(byteLen / sizeof(WCHAR)));
 
 	WCHAR searchPath[MAX_PATH];
@@ -1474,7 +1705,7 @@ static BOOL ScanDelayHookFiles(const WCHAR* ntPath, size_t byteLen) {
 		NtClose(hFile);
 		return FALSE;
 	}
-
+	RtlZeroMemory(fileContent, (SIZE_T)fsi.EndOfFile.QuadPart + 1);
 	status = NtReadFile(hFile, NULL, NULL, NULL, &iosb, fileContent, (ULONG)fsi.EndOfFile.QuadPart, NULL, NULL);
 	NtClose(hFile);
 	if (!NT_SUCCESS(status)) {
@@ -1482,15 +1713,21 @@ static BOOL ScanDelayHookFiles(const WCHAR* ntPath, size_t byteLen) {
 		return FALSE;
 	}
 
+	int len = 0;
+	for (size_t i = 2; i < (SIZE_T)fsi.EndOfFile.QuadPart + 1; i++) {
+		fileContent[len++] = fileContent[i];
+		i += 1;
+	}
 	// delay hook file is actually a .hookseq format file
 	// format liek this:
 	//		[hook]\nmodule=xxx\noffset=xxx\ndllPath=xxx\nexport=xxx\n\n
 	const char* p = fileContent;
-	const char* end = fileContent + fsi.EndOfFile.QuadPart;
+	const char* end = fileContent + len;
 
 	while (p < end) {
 		// skip blank line
-		while (p < end && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
+		while (p < end && (*p != '\n')) p++;
+		p++;
 		if (p >= end || strncmp(p, "[hook]", 6) != 0) break;
 		p += 6;
 
@@ -1550,11 +1787,26 @@ static BOOL ScanDelayHookFiles(const WCHAR* ntPath, size_t byteLen) {
 		// construct event name and create
 		WCHAR loadEventName[MAX_PATH];
 		WCHAR hookEventName[MAX_PATH];
-		swprintf_s(loadEventName, LOAD_NOTIFY_EVENT_FMT, processFnvHash, dllFnvHash);
-		swprintf_s(hookEventName, HOOK_NOTIFY_EVENT_FMT, processFnvHash, dllFnvHash);
+		swprintf_s(loadEventName, NT_LOAD_NOTIFY_EVENT_FMT, processFnvHash, dllFnvHash);
+		swprintf_s(hookEventName, NT_HOOK_NOTIFY_EVENT_FMT, processFnvHash, dllFnvHash);
+		
+		UNICODE_STRING usLoad, usHook;
+		RtlInitUnicodeString(&usLoad, loadEventName);
+		RtlInitUnicodeString(&usHook, hookEventName);
 
-		HANDLE hLoad = CreateEventW(NULL, FALSE, FALSE, loadEventName);
-		HANDLE hHook = CreateEventW(NULL, FALSE, FALSE, hookEventName);
+		OBJECT_ATTRIBUTES oaLoad, oaHook;
+		InitializeObjectAttributes(&oaLoad, &usLoad, OBJ_CASE_INSENSITIVE, NULL, NULL);
+		InitializeObjectAttributes(&oaHook, &usHook, OBJ_CASE_INSENSITIVE, NULL, NULL);
+
+		HANDLE hLoad = NULL;
+		HANDLE hHook = NULL;
+		NTSTATUS st1 = NtOpenEvent(&hLoad, EVENT_MODIFY_STATE | SYNCHRONIZE, &oaLoad);
+		NTSTATUS st2 = NtOpenEvent(&hHook, EVENT_MODIFY_STATE | SYNCHRONIZE, &oaHook);
+		if (!NT_SUCCESS(st1) || !NT_SUCCESS(st2)) {
+			if (NT_SUCCESS(st1)) NtClose(hLoad);
+			if (NT_SUCCESS(st2)) NtClose(hHook);
+			break;
+		}
 
 		// 添加到链表
 		InstantHookTarget* node = (InstantHookTarget*)RtlAllocateHeap(GetProcessHeapFromPEB(), HEAP_ZERO_MEMORY, sizeof(InstantHookTarget));
@@ -1564,6 +1816,7 @@ static BOOL ScanDelayHookFiles(const WCHAR* ntPath, size_t byteLen) {
 			node->dllFnvHash = dllFnvHash;
 			node->hLoadNotifyEvent = hLoad;
 			node->hHookNotifyEvent = hHook;
+			wcscpy_s(node->dllPath, dllPath);
 			node->next = g_InstantHookList;
 			g_InstantHookList = node;
 		}
@@ -1575,7 +1828,7 @@ static BOOL ScanDelayHookFiles(const WCHAR* ntPath, size_t byteLen) {
 
 void __fastcall LdrLoadDll_HookHandler(PVOID rcx, PVOID rdx, PVOID r8, PVOID r9, PVOID rsp) {
 	// rcx = PUNICODE_STRING DllName (LdrLoadDll 第一个参数 DllName)
-	PUNICODE_STRING fullDllName = (PUNICODE_STRING)GetRdi();
+	PUNICODE_STRING fullDllName = (PUNICODE_STRING)*(DWORD64*)(GetRdi());
 	if (fullDllName && fullDllName->Buffer && fullDllName->Length > 0) {
 		// DllName 本身就是文件名（如 ntdll.dll），不需要提取路径
 		USHORT charCount = fullDllName->Length / sizeof(WCHAR);
@@ -1593,6 +1846,27 @@ void __fastcall LdrLoadDll_HookHandler(PVOID rcx, PVOID rdx, PVOID r8, PVOID r9,
 				targetUs.MaximumLength = targetUs.Length;
 
 				if (RtlCompareUnicodeString(fullDllName, &targetUs, TRUE) == 0) {
+					// DbgBreakPoint();
+
+					// Get current process path and calculate processFnvHash
+					ULONG returnLength = 0;
+					PBYTE buff[MAX_PATH * 4] = { 0 };
+					NTSTATUS status = NtQueryInformationProcess(
+						HANDLE(-1),
+						ProcessImageFileName,
+						buff,
+						MAX_PATH * 4,
+						&returnLength
+					);
+
+					if (NT_SUCCESS(status)) {
+						UNICODE_STRING* us = (UNICODE_STRING*)buff;
+						unsigned long long processFnvHash = ComputeFnvHash(us->Buffer, us->Length / sizeof(WCHAR));
+
+						// Write current PID to hook event file
+						WriteHookEventFile(processFnvHash, dllFnvHash);
+					}
+
 					// Match! Signal LoadNotify and wait for HookNotify
 					if (node->hLoadNotifyEvent) {
 						NtSetEvent(node->hLoadNotifyEvent, NULL);

@@ -9,6 +9,7 @@
 #include "ETW.h"
 #include "Helper.h"
 #include "../Shared/LogMacros.h"
+#include "../Shared/SharedMacroDef.h"
 #include "UMControllerMsgs.h"
 
 
@@ -66,6 +67,17 @@ BOOL CUMControllerApp::InitInstance()
 
 	// Now safe to start ETW tracing (window/dialog not yet created but MFC core initialized)
 	GetETW().StartTracer();
+
+		// Write current PID to file for umhh.dll to read
+		{
+			DWORD pid = GetCurrentProcessId();
+			FILE* f = NULL;
+			_wfopen_s(&f, UMCONTROLLER_PID_FILE, L"w");
+			if (f) {
+				fprintf(f, "%u", pid);
+				fclose(f);
+			}
+		}
 	GetETW().Reg();
 
 

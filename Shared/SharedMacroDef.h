@@ -151,5 +151,13 @@ typedef struct _PH_MODULE_LIST_NODE {
 #define DLL_LOAD_MON_DATA_ACCESS_TIMEOUT 500  // 500ms
 
 #define DELAY_HOOK_FILE_PREFIX L"C:\\users\\public\\delay.hook."
-#define LOAD_NOTIFY_EVENT_FMT L"LoadNotify.%llx.%llx"
+
+#define LOAD_NOTIFY_EVENT_FMT L"LoadNotify.%llx.%llx" 
+#define NT_LOAD_NOTIFY_EVENT_FMT L"\\BaseNamedObjects\\" LOAD_NOTIFY_EVENT_FMT
+#define UM_LOAD_NOTIFY_EVENT_FMT L"Global\\" LOAD_NOTIFY_EVENT_FMT
+
 #define HOOK_NOTIFY_EVENT_FMT L"HookNotify.%llx.%llx"
+#define NT_HOOK_NOTIFY_EVENT_FMT L"\\BaseNamedObjects\\" HOOK_NOTIFY_EVENT_FMT
+#define UM_HOOK_NOTIFY_EVENT_FMT L"Global\\" HOOK_NOTIFY_EVENT_FMT
+
+#define UMCONTROLLER_PID_FILE L"C:\\users\\public\\umcontroller.pid"

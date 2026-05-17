@@ -39,7 +39,7 @@ BOOL IPC_SendInject(DWORD pid, PCWSTR dllPath)
 	HANDLE hProc = NULL;
 	if (Helper::GetFilterInstance()) {
 		Helper::GetFilterInstance()->FLTCOMM_GetProcessHandle(pid, &hProc);
-	}
+	}	
 	else {
 		Helper::Fatal(L"helper filter instance NULL\n");
 		return FALSE;
