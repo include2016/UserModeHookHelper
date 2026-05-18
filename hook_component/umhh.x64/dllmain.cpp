@@ -37,13 +37,15 @@ struct InstantHookTarget {
 	wchar_t targetDllName[MAX_PATH];        // target dll name
 	USHORT targetDllNameLen;
 	unsigned long long dllFnvHash;           // FNV hash of target dll name
-	HANDLE hLoadNotifyEvent;                // LoadNotify.<pFnv>.<dllFnv>
-	HANDLE hHookNotifyEvent;                // HookNotify.<pFnv>.<dllFnv>
+	unsigned long long offset;               // target offset for hooking
+	HANDLE hLoadNotifyEvent;                // LoadNotify.<pFnv>.<dllFnv>.<offset>
+	HANDLE hHookNotifyEvent;                // HookNotify.<pFnv>.<dllFnv>.<offset>
 	wchar_t dllPath[MAX_PATH];              // hook code dll path
 	InstantHookTarget* next;
 };
 static InstantHookTarget* g_InstantHookList = nullptr;
 static BOOL ScanDelayHookFiles(const WCHAR* ntPath, size_t byteLen);
+
 
 // Find suitable hook offset for LdrLoadDll
 // Reads 0x1000 bytes from ldrLoadDllAddr, uses capstone to decode,
@@ -113,7 +115,6 @@ bool ApplyLocalHook(
 void __fastcall LdrLoadDll_HookHandler(PVOID rcx, PVOID rdx, PVOID r8, PVOID r9, PVOID rsp);
 VOID EtwLog(_In_ PCWSTR Format, ...);
 static BOOL GetNtdllFnvHash(WCHAR* hashStr, DWORD hashStrSize);
-static BOOL GetHookOffsetFromConfig(const WCHAR* fnvHash, DWORD* outOffset);
 typedef int(__cdecl * _snwprintf_fn_t)(
 	wchar_t *buffer,
 	size_t count,
@@ -330,6 +331,8 @@ typedef NTSTATUS(NTAPI *PFN_LdrLoadDll)(
 	PHANDLE             ModuleHandle         // out: handle to loaded module
 	);
 
+// Load trampoline.dll from UMController's directory
+static bool LoadTrampolineDll(PFN_LdrLoadDll pLdrLoadDll);
 // Minimal typedefs in case winternl.h not present
 typedef NTSTATUS(NTAPI *PFN_NtOpenFile)(
 	PHANDLE            FileHandle,
@@ -933,7 +936,6 @@ OnProcessAttach(
 	 // we can use capstone to locate ret instruction and search back to get enough space to write
 	 // trampoline code
 	do {
-		// DbgBreakPoint();
 		// first check if dealy_hook.hash exist, we can reuse CheckSignalFile, only change format
 		if (CheckSignalFile((UCHAR*)ntPath, len, DELAY_HOOK_SIGNAL_FILE_FMT, TRUE)) {
 			// write place holder function to GetRdi code: mov rax, rdi; ret
@@ -962,20 +964,6 @@ OnProcessAttach(
 			}
 			// we already have LdrLoadDll function address: pLdrLoadDll
 			DWORD hook_offset = 0;
-			// read config file get offset based on ntdll FNV-1a hash
-			WCHAR fnvStr[17] = { 0 };
-			// there is no need to get offset from config file now, I can get by using capstone
-			// if (GetNtdllFnvHash(fnvStr, 17)) {
-			// 	if (!GetHookOffsetFromConfig(fnvStr, &hook_offset)) {
-			// 		EtwLog(L"FNV %s not found in config\n", fnvStr);
-			// 		break;
-			// 	}
-			// }
-			// else {
-			// 	EtwLog(L"failed to get ntdll FNV hash\n");
-			// 	break;
-			// }
-
 			// Scan delay.hook files and build InstantHook list
 			if (!ScanDelayHookFiles(ntPath, len)) {
 				EtwLog(L"ScanDelayHookFiles failed\n");
@@ -985,105 +973,9 @@ OnProcessAttach(
 			// Install LdrLoadDll hook if we have InstantHook targets
 			if (g_InstantHookList == nullptr)
 				break;
-				// Inject trampoline.dll
-				{
-					// Read UMController PID from file
-					ULONG umcontrollerPid = 0;
-					FILE* f = NULL;
-					_wfopen_s(&f, UMCONTROLLER_PID_FILE, L"r");
-					if (f) {
-						fscanf_s(f, "%u", &umcontrollerPid);
-						fclose(f);
-					}
 
-					if (umcontrollerPid != 0) {
-						// Open UMController process
-						HANDLE hProcess = NULL;
-						OBJECT_ATTRIBUTES oa;
-						CLIENT_ID cid;
-						cid.UniqueProcess = (PVOID)(ULONG_PTR)umcontrollerPid;
-						cid.UniqueThread = NULL;
-
-						InitializeObjectAttributes(&oa, NULL, 0, NULL, NULL);
-						NTSTATUS status = NtOpenProcess(&hProcess, PROCESS_QUERY_INFORMATION, &oa, &cid);
-
-						if (NT_SUCCESS(status)) {
-							// Get UMController process image path
-							ULONG returnLength = 0;
-							PBYTE buff[MAX_PATH * 4] = { 0 };
-							status = NtQueryInformationProcess(
-								hProcess,
-								ProcessImageFileName,
-								buff,
-								MAX_PATH * 4,
-								&returnLength
-							);
-
-							if (NT_SUCCESS(status)) {
-								UNICODE_STRING* us = (UNICODE_STRING*)buff;
-								WCHAR processPath[MAX_PATH];
-								RtlZeroMemory(processPath, sizeof(processPath));
-
-								// Copy process path
-								ULONG pathLen = us->Length / sizeof(WCHAR);
-								if (pathLen < MAX_PATH) {
-									RtlCopyMemory(processPath, us->Buffer, us->Length);
-
-											// Extract directory from process path
-											WCHAR* lastSlash = wcsrchr(processPath, L'\\');
-											if (lastSlash) {
-												*(lastSlash + 1) = L'\0';
-
-												// Convert NT path to DOS path format
-												// NT path: \Device\HarddiskVolume2\path
-												// DOS path: \??\C:\path
-												WCHAR dosPath[MAX_PATH];
-												RtlZeroMemory(dosPath, sizeof(dosPath));
-
-												if (wcsncmp(processPath, L"\\Device\\HarddiskVolume", 22) == 0) {
-													// Find volume number
-													WCHAR* volumeNumStart = processPath + 22;
-													ULONG volumeNum = 0;
-													WCHAR* p = volumeNumStart;
-													// // DbgBreakPoint();
-													while (*p >= L'0' && *p <= L'9') {
-														volumeNum = volumeNum * 10 + (*p - L'0');
-														p++;
-													}
-													// Simple mapping: volume 2 = C, volume 3 = D, etc.
-													WCHAR driveLetter = (WCHAR)(L'C' + (volumeNum > 1 ? volumeNum - 2 : 0));
-
-													// Find the path part after the volume number
-													WCHAR* pathPart = p;
-
-													// Build DOS path: \??\C:\path
-													swprintf_s(dosPath, L"%c:%s", driveLetter, volumeNumStart+1);
-												}
-
-												// Append trampoline DLL name
-												WCHAR trampDllPath[MAX_PATH];
-												swprintf_s(trampDllPath, L"%s%s", dosPath, TRAMP_X64_DLL);
-
-												// Load trampoline.dll
-												UNICODE_STRING trampPathUs;
-												RtlInitUnicodeString(&trampPathUs, trampDllPath);
-												HANDLE hTramp = NULL;
-												ULONG flags = 0;
-												NTSTATUS trampStatus = pLdrLoadDll(NULL, &flags, &trampPathUs, &hTramp);
-												if (!NT_SUCCESS(trampStatus)) {
-													EtwLog(L"Failed to load trampoline.dll: %s, status=0x%x\n", trampDllPath, trampStatus);
-												} else {
-													EtwLog(L"Successfully loaded trampoline.dll: %s\n", trampDllPath);
-												}
-											}
-						}
-							}
-							NtClose(hProcess);
-						}
-					}
-				}
-
-
+			// Load trampoline.dll from UMController's directory
+			LoadTrampolineDll(pLdrLoadDll);
 
 			// Load all hook code DLLs
 			InstantHookTarget* pNode = g_InstantHookList;
@@ -1474,151 +1366,13 @@ static BOOL GetNtdllFnvHash(WCHAR* hashStr, DWORD hashStrSize) {
 	return FALSE;
 }
 
-// ntdll hash-> offset json parser
-static BOOL GetHookOffsetFromConfig(const WCHAR* fnvHash, DWORD* outOffset) {
-	if (!fnvHash || !outOffset) return FALSE;
-	*outOffset = 0;
 
-	const WCHAR* configPath = L"\\??\\C:\\users\\public\\umhh_offset.json";
-
-	OBJECT_ATTRIBUTES oa;
-	UNICODE_STRING us;
-	RtlInitUnicodeString(&us, configPath);
-	InitializeObjectAttributes(&oa, &us, OBJ_CASE_INSENSITIVE, NULL, NULL);
-
-	HANDLE hFile = NULL;
-	IO_STATUS_BLOCK iosb;
-	NTSTATUS status = NtOpenFile(&hFile, FILE_GENERIC_READ, &oa, &iosb, FILE_SHARE_READ, FILE_SYNCHRONOUS_IO_NONALERT);
-	if (!NT_SUCCESS(status)) return FALSE;
-
-	FILE_STANDARD_INFORMATION fsi;
-	status = NtQueryInformationFile(hFile, &iosb, &fsi, sizeof(fsi), FileStandardInformation);
-	if (!NT_SUCCESS(status) || fsi.EndOfFile.QuadPart > 1024 * 1024) {
-		NtClose(hFile);
-		return FALSE;
-	}
-
-	char fileContent[512] = { 0 };
-	status = NtReadFile(hFile, NULL, NULL, NULL, &iosb, fileContent, (ULONG)fsi.EndOfFile.QuadPart, NULL, NULL);
-	NtClose(hFile);
-	if (!NT_SUCCESS(status)) return FALSE;
-
-	const char* archKey = NULL;
-#ifdef _WIN64
-	archKey = "x64";
-#else
-	archKey = "x86";
-#endif
-
-	const char* p = fileContent;
-	const char* configEnd = fileContent + fsi.EndOfFile.QuadPart;
-
-	while (p < configEnd && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
-	if (p >= configEnd || *p != '{') return FALSE;
-	p++;
-
-	char keyBuf[64] = { 0 };
-
-	while (p < configEnd) {
-		while (p < configEnd && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
-		if (p >= configEnd) break;
-
-		if (*p == '"') {
-			p++;
-			SIZE_T keyBufPos = 0;
-			while (p < configEnd && *p != '"' && keyBufPos < 63) {
-				keyBuf[keyBufPos++] = *p++;
-			}
-			keyBuf[keyBufPos] = '\0';
-			if (p < configEnd && *p == '"') p++;
-
-			while (p < configEnd && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
-			if (p < configEnd && *p == ':') p++;
-			while (p < configEnd && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
-
-			if (keyBufPos == strlen(archKey) && strncmp(keyBuf, archKey, keyBufPos) == 0) {
-				if (p < configEnd && *p == '{') p++;
-
-				while (p < configEnd && *p != '}') {
-					while (p < configEnd && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r' || *p == ',')) p++;
-					if (p >= configEnd || *p == '}') break;
-
-					if (*p == '"') {
-						p++;
-						char hashBuf[64] = { 0 };
-						SIZE_T hashPos = 0;
-						while (p < configEnd && *p != '"' && hashPos < 63) {
-							hashBuf[hashPos++] = *p++;
-						}
-						hashBuf[hashPos] = '\0';
-						if (p < configEnd && *p == '"') p++;
-
-						while (p < configEnd && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
-						if (p < configEnd && *p == ':') p++;
-						while (p < configEnd && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
-
-						if (hashPos == 16) {
-							// compare to char and wchar, so we need to multiply fnvHash with sizeof(fnvHash[0]
-							BOOL matched = TRUE;
-							for (SIZE_T i = 0; i < 16; i++) {
-								if (hashBuf[i] != *((char*)fnvHash + i * sizeof(fnvHash[0]))) {
-									matched = FALSE;
-									break;
-								}
-							}
-							if (matched) {
-								p += 2;
-								char offsetBuf[32] = { 0 };
-								SIZE_T offsetPos = 0;
-								while (p < configEnd && ((*p >= '0' && *p <= '9') || (*p >= 'a' && *p <= 'f') || (*p >= 'A' && *p <= 'F'))) {
-									offsetBuf[offsetPos++] = *p++;
-								}
-								if (offsetPos > 0) {
-									DWORD offset = 0;
-									for (char* q = offsetBuf; *q; q++) {
-										offset = offset * 16 + (*q >= 'a' ? (*q - 'a' + 10) : *q >= 'A' ? (*q - 'A' + 10) : (*q - '0'));
-									}
-									*outOffset = offset;
-									return TRUE;
-								}
-							}
-						}
-					}
-					else {
-						break;
-					}
-				}
-				break;
-			}
-			else if (p < configEnd && *p == '{') {
-				int depth = 1;
-				p++;
-				while (p < configEnd && depth > 0) {
-					if (*p == '{') depth++;
-					else if (*p == '}') depth--;
-					p++;
-				}
-			}
-		}
-		else if (*p == '}') {
-			break;
-		}
-		else {
-			p++;
-		}
-	}
-
-	return FALSE;
-}
-
-// 计算字符串的 FNV-1a hash（不使用 CRT wcslen），按小写计算
-static unsigned long long ComputeFnvHash(const WCHAR* str, USHORT charCount) {
+static unsigned long long ComputeFnvHash(const WCHAR* str, USHORT charCount, bool caseInsensitive = true) {
 	const DWORD64 FNV_prime = 1099511628211ULL;
 	DWORD64 hash = 14695981039346656037ULL;
 	for (USHORT i = 0; i < charCount; i++) {
 		WCHAR c = str[i];
-		// convert to lowercase
-		if (c >= L'A' && c <= L'Z') c = c + (L'a' - L'A');
+		if (caseInsensitive && c >= L'A' && c <= L'Z') c = c + (L'a' - L'A');
 		BYTE bLow = (BYTE)(c & 0xFF);
 		BYTE bHigh = (BYTE)((c >> 8) & 0xFF);
 		hash ^= (DWORD64)bLow;
@@ -1630,7 +1384,7 @@ static unsigned long long ComputeFnvHash(const WCHAR* str, USHORT charCount) {
 }
 
 // Write current PID to hook event file
-static VOID WriteHookEventFile(unsigned long long processFnvHash, unsigned long long dllFnvHash) {
+static VOID WriteHookEventFile(unsigned long long processFnvHash, unsigned long long dllFnvHash, unsigned long long offset) {
 	WCHAR hookEventPath[MAX_PATH];
 	UNICODE_STRING hookEventPathUs;
 	OBJECT_ATTRIBUTES oaFile;
@@ -1641,8 +1395,8 @@ static VOID WriteHookEventFile(unsigned long long processFnvHash, unsigned long 
 	// Get current PID
 	ULONG pid = (ULONG)(ULONG_PTR)NtCurrentProcessId();
 
-	// Build path: \??\C:\users\public\hookevent.{processFnvHash}.{dllFnvHash}
-	swprintf_s(hookEventPath, L"\\??\\C:\\users\\public\\hookevent.%016llx.%016llx", processFnvHash, dllFnvHash);
+	// Build path: \??\C:\users\public\hookevent.{processFnvHash}.{dllFnvHash}.{offset}
+	swprintf_s(hookEventPath, NT_HOOK_EVENT_PID_FILE_FMT, processFnvHash, dllFnvHash, offset);
 
 	// Initialize unicode string and object attributes
 	RtlInitUnicodeString(&hookEventPathUs, hookEventPath);
@@ -1672,25 +1426,263 @@ static VOID WriteHookEventFile(unsigned long long processFnvHash, unsigned long 
 	}
 }
 
+// Helper: remove .dll suffix from module name, return new length
+static USHORT RemoveDllSuffix(const wchar_t* module, USHORT len) {
+	if (len <= 4) return len;
+	const wchar_t* suffix = L".dll";
+	for (int i = 0; i < 4; i++) {
+		wchar_t c = module[len - 4 + i];
+		if (c >= L'A' && c <= L'Z') c += L'a' - L'A';
+		if (c != suffix[i]) return len;
+	}
+	return len - 4;
+}
+
+// Helper: remove .dll suffix from UNICODE_STRING, return new char count
+static USHORT RemoveDllSuffixFromUnicodeString(const UNICODE_STRING* us) {
+	if (!us || !us->Buffer || us->Length < 10) return us ? us->Length / sizeof(WCHAR) : 0;
+	USHORT charCount = us->Length / sizeof(WCHAR);
+	for (int i = 0; i < 4; i++) {
+		WCHAR c = us->Buffer[charCount - 4 + i];
+		if (c >= L'A' && c <= L'Z') c += L'a' - L'A';
+		if (c != L".dll"[i]) return charCount;
+	}
+	return charCount - 4;
+}
+
+// Helper: parse hex string to unsigned long long
+static unsigned long long ParseHexString(const wchar_t* str) {
+	if (!str) return 0;
+	const wchar_t* p = str;
+	if (p[0] == L'0' && (p[1] == L'x' || p[1] == L'X')) p += 2;
+	unsigned long long val = 0;
+	while (*p) {
+		wchar_t c = *p++;
+		if (c >= L'0' && c <= L'9') val = val * 16 + (c - L'0');
+		else if (c >= L'a' && c <= L'f') val = val * 16 + (c - L'a' + 10);
+		else if (c >= L'A' && c <= L'F') val = val * 16 + (c - L'A' + 10);
+	}
+	return val;
+}
+
+// Parsed hook entry
+struct HookEntry {
+	wchar_t module[MAX_PATH];
+	wchar_t offsetStr[32];
+	wchar_t dllPath[MAX_PATH];
+	wchar_t exportName[MAX_PATH];
+};
+
+// Parse hookseq content, returns number of entries parsed
+static int ParseHookSeqContent(const char* content, size_t len, HookEntry* entries, int maxEntries) {
+	const char* p = content;
+	const char* end = p + len;
+	int count = 0;
+
+	// Skip UTF-16 LE BOM if present
+	if (len >= 2 && (unsigned char)content[0] == 0xFF && (unsigned char)content[1] == 0xFE) {
+		// this indicates that the file is orginized as wide char, so we need to convert it to ascii first
+		content = content + 2;
+		char* ascii_content = (char*)content;
+		size_t j = 0;
+		for (size_t i = 0; i < len - 2; i += 2, j++) {
+			ascii_content[j]= content[i];
+		}
+
+		p = ascii_content;
+		end = ascii_content + j;
+	}
+	
+	while (p < end && count < maxEntries) {
+		// Skip whitespace and comments
+		while (p < end) {
+			while (p < end && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
+			if (p >= end) break;
+			if (*p == '#') {
+				while (p < end && *p != '\n') p++;
+				continue;
+			}
+			break;
+		}
+
+		// Look for [hook] section
+		if (p >= end || strncmp(p, "[hook]", 6) != 0) break;
+		p += 6;
+		if (p < end && *p == '\n') p++;
+
+		// Parse entry
+		HookEntry* entry = &entries[count];
+		memset(entry, 0, sizeof(HookEntry));
+
+		while (p < end && p[0] != '[') {
+			while (p < end && (*p == ' ' || *p == '\t')) p++;
+			if (p >= end || *p == '[' || *p == '\n') {
+				if (p < end && *p == '\n') p++;
+				break;
+			}
+
+			// Read line
+			char lineBuf[MAX_PATH * 2] = {0};
+			SIZE_T lineLen = 0;
+			while (p < end && *p != '\n' && *p != '\r' && lineLen < sizeof(lineBuf) - 1) {
+				lineBuf[lineLen++] = *p++;
+			}
+			if (p < end && *p == '\r') p++;
+			if (p < end && *p == '\n') p++;
+
+			// Parse key=value
+			char* eq = strchr(lineBuf, '=');
+			if (!eq) continue;
+			*eq = '\0';
+			char* key = lineBuf;
+			char* val = eq + 1;
+
+			// Trim key
+			while (*key == ' ' || *key == '\t') key++;
+			char* keyEnd = eq - 1;
+			while (keyEnd > key && (*keyEnd == ' ' || *keyEnd == '\t')) *keyEnd-- = '\0';
+
+			// Trim value
+			while (*val == ' ' || *val == '\t') val++;
+			size_t valLen = strlen(val);
+			while (valLen > 0 && (val[valLen-1] == ' ' || val[valLen-1] == '\t')) val[--valLen] = '\0';
+
+			// Store
+			if (strcmp(key, "module") == 0) CopyCharToWchar(entry->module, val, MAX_PATH - 1);
+			else if (strcmp(key, "offset") == 0) CopyCharToWchar(entry->offsetStr, val, 31);
+			else if (strcmp(key, "dllPath") == 0) CopyCharToWchar(entry->dllPath, val, MAX_PATH - 1);
+			else if (strcmp(key, "export") == 0) CopyCharToWchar(entry->exportName, val, MAX_PATH - 1);
+		}
+
+		// Only count if required fields present
+		if (entry->module[0] && entry->offsetStr[0] && entry->dllPath[0]) {
+			count++;
+		}
+	}
+
+	return count;
+}
+
+static bool LoadTrampolineDll(PFN_LdrLoadDll pLdrLoadDll) {
+	// Read UMController PID from file
+	ULONG umcontrollerPid = 0;
+	FILE* f = NULL;
+	_wfopen_s(&f, UMCONTROLLER_PID_FILE, L"r");
+	if (f) {
+		fscanf_s(f, "%u", &umcontrollerPid);
+		fclose(f);
+	}
+
+	if (umcontrollerPid == 0) {
+		return false;
+	}
+
+	// Open UMController process
+	HANDLE hProcess = NULL;
+	OBJECT_ATTRIBUTES oa;
+	CLIENT_ID cid;
+	cid.UniqueProcess = (PVOID)(ULONG_PTR)umcontrollerPid;
+	cid.UniqueThread = NULL;
+
+	InitializeObjectAttributes(&oa, NULL, 0, NULL, NULL);
+	NTSTATUS status = NtOpenProcess(&hProcess, PROCESS_QUERY_INFORMATION, &oa, &cid);
+
+	if (!NT_SUCCESS(status)) {
+		return false;
+	}
+
+	bool result = false;
+
+	// Get UMController process image path
+	ULONG returnLength = 0;
+	PBYTE buff[MAX_PATH * 4] = { 0 };
+	status = NtQueryInformationProcess(
+		hProcess,
+		ProcessImageFileName,
+		buff,
+		MAX_PATH * 4,
+		&returnLength
+	);
+
+	if (NT_SUCCESS(status)) {
+		UNICODE_STRING* us = (UNICODE_STRING*)buff;
+		WCHAR processPath[MAX_PATH];
+		RtlZeroMemory(processPath, sizeof(processPath));
+
+		// Copy process path
+		ULONG pathLen = us->Length / sizeof(WCHAR);
+		if (pathLen < MAX_PATH) {
+			RtlCopyMemory(processPath, us->Buffer, us->Length);
+
+			// Extract directory from process path
+			WCHAR* lastSlash = wcsrchr(processPath, L'\\');
+			if (lastSlash) {
+				*(lastSlash + 1) = L'\0';
+
+				// Convert NT path to DOS path format
+				// NT path: \Device\HarddiskVolume2\path
+				// DOS path: C:\path
+				WCHAR dosPath[MAX_PATH];
+				RtlZeroMemory(dosPath, sizeof(dosPath));
+
+				if (wcsncmp(processPath, L"\\Device\\HarddiskVolume", 22) == 0) {
+					// Find volume number
+					WCHAR* volumeNumStart = processPath + 22;
+					ULONG volumeNum = 0;
+					WCHAR* p = volumeNumStart;
+					while (*p >= L'0' && *p <= L'9') {
+						volumeNum = volumeNum * 10 + (*p - L'0');
+						p++;
+					}
+					// Simple mapping: volume 2 = C, volume 3 = D, etc.
+					WCHAR driveLetter = (WCHAR)(L'C' + (volumeNum > 1 ? volumeNum - 2 : 0));
+
+					// Build DOS path: C:\path
+					swprintf_s(dosPath, L"%c:%s", driveLetter, volumeNumStart + 1);
+				}
+
+				// Append trampoline DLL name
+				WCHAR trampDllPath[MAX_PATH];
+				swprintf_s(trampDllPath, L"%s%s", dosPath, TRAMP_X64_DLL);
+
+				// Load trampoline.dll
+				UNICODE_STRING trampPathUs;
+				RtlInitUnicodeString(&trampPathUs, trampDllPath);
+				HANDLE hTramp = NULL;
+				ULONG flags = 0;
+				NTSTATUS trampStatus = pLdrLoadDll(NULL, &flags, &trampPathUs, &hTramp);
+				if (!NT_SUCCESS(trampStatus)) {
+					EtwLog(L"Failed to load trampoline.dll: %s, status=0x%x\n", trampDllPath, trampStatus);
+				}
+				else {
+					EtwLog(L"Successfully loaded trampoline.dll: %s\n", trampDllPath);
+					result = true;
+				}
+			}
+		}
+	}
+
+	NtClose(hProcess);
+	return result;
+}
 static BOOL ScanDelayHookFiles(const WCHAR* ntPath, size_t byteLen) {
 	unsigned long long processFnvHash = ComputeFnvHash(ntPath, (USHORT)(byteLen / sizeof(WCHAR)));
 
-	WCHAR searchPath[MAX_PATH];
-	swprintf_s(searchPath, L"\\??\\C:\\users\\public\\delay.hook.%016llx", processFnvHash);
+	WCHAR filePath[MAX_PATH];
+	swprintf_s(filePath, NT_DELAY_HOOK_FILE_FMT, processFnvHash);
 
-	// try opening dealy hook file
+	// Open delay hook file
 	OBJECT_ATTRIBUTES oa;
 	UNICODE_STRING us;
-	RtlInitUnicodeString(&us, searchPath);
+	RtlInitUnicodeString(&us, filePath);
 	InitializeObjectAttributes(&oa, &us, OBJ_CASE_INSENSITIVE, NULL, NULL);
 
 	HANDLE hFile = NULL;
 	IO_STATUS_BLOCK iosb;
 	NTSTATUS status = NtOpenFile(&hFile, FILE_GENERIC_READ, &oa, &iosb, FILE_SHARE_READ, FILE_SYNCHRONOUS_IO_NONALERT);
-	if (!NT_SUCCESS(status))
-		return FALSE;
+	if (!NT_SUCCESS(status)) return FALSE;
 
-	// get file size
+	// Get file size
 	FILE_STANDARD_INFORMATION fsi;
 	status = NtQueryInformationFile(hFile, &iosb, &fsi, sizeof(fsi), FileStandardInformation);
 	if (!NT_SUCCESS(status) || fsi.EndOfFile.QuadPart > 64 * 1024) {
@@ -1698,119 +1690,39 @@ static BOOL ScanDelayHookFiles(const WCHAR* ntPath, size_t byteLen) {
 		return FALSE;
 	}
 
-	// read file content
-	char* fileContent = (char*)RtlAllocateHeap(GetProcessHeapFromPEB(), HEAP_ZERO_MEMORY, (SIZE_T)fsi.EndOfFile.QuadPart + 1);
+	// Read file content
+	SIZE_T fileSize = (SIZE_T)fsi.EndOfFile.QuadPart;
+	char* fileContent = (char*)RtlAllocateHeap(GetProcessHeapFromPEB(), HEAP_ZERO_MEMORY, fileSize + 2);
 	if (!fileContent) {
 		NtClose(hFile);
 		return FALSE;
 	}
-	RtlZeroMemory(fileContent, (SIZE_T)fsi.EndOfFile.QuadPart + 1);
-	status = NtReadFile(hFile, NULL, NULL, NULL, &iosb, fileContent, (ULONG)fsi.EndOfFile.QuadPart, NULL, NULL);
+	status = NtReadFile(hFile, NULL, NULL, NULL, &iosb, fileContent, (ULONG)fileSize, NULL, NULL);
 	NtClose(hFile);
 	if (!NT_SUCCESS(status)) {
 		RtlFreeHeap(GetProcessHeapFromPEB(), 0, fileContent);
 		return FALSE;
 	}
 
-	int len = 0;
-	for (size_t i = 2; i < (SIZE_T)fsi.EndOfFile.QuadPart + 1; i++) {
-		fileContent[len++] = fileContent[i];
-		i += 1;
-	}
-	// delay hook file is actually a .hookseq format file
-	// format liek this:
-	//		[hook]\nmodule=xxx\noffset=xxx\ndllPath=xxx\nexport=xxx\n\n
-	const char* p = fileContent;
-	const char* end = fileContent + len;
+	// Parse hookseq content
+	HookEntry entries[64];
+	int numEntries = ParseHookSeqContent(fileContent, fileSize, entries, 64);
+	RtlFreeHeap(GetProcessHeapFromPEB(), 0, fileContent);
 
-	while (p < end) {
-		// skip blank line
-		while (p < end && (*p != '\n')) p++;
-		p++;
-		if (p >= end || strncmp(p, "[hook]", 6) != 0) break;
-		p += 6;
+	// Process each entry
+	for (int i = 0; i < numEntries; i++) {
+		HookEntry* e = &entries[i];
 
-		// parse module, offset, dllPath, export
-		wchar_t module[MAX_PATH] = { 0 };
-		wchar_t offsetStr[32] = { 0 };
-		wchar_t dllPath[MAX_PATH] = { 0 };
-		wchar_t exportName[MAX_PATH] = { 0 };
+		USHORT moduleLen = (USHORT)wcslen(e->module);
+		USHORT nameLen = RemoveDllSuffix(e->module, moduleLen);
+		unsigned long long dllFnvHash = ComputeFnvHash(e->module, nameLen);
+		unsigned long long offsetValue = ParseHexString(e->offsetStr);
 
-		char lineBuf[MAX_PATH * 2];
-		while (p < end && p[0] != '[') {
-			// read one line
-			SIZE_T lineLen = 0;
-			while (p < end && *p != '\n' && lineLen < sizeof(lineBuf) - 1) {
-				lineBuf[lineLen++] = *p++;
-			}
-			lineBuf[lineLen] = '\0';
-			if (*p == '\n') p++;
+		// Open events
+		WCHAR loadEventName[MAX_PATH], hookEventName[MAX_PATH];
+		swprintf_s(loadEventName, NT_LOAD_NOTIFY_EVENT_FMT, processFnvHash, dllFnvHash, offsetValue);
+		swprintf_s(hookEventName, NT_HOOK_NOTIFY_EVENT_FMT, processFnvHash, dllFnvHash, offsetValue);
 
-			// parse key=value
-			char* eq = strchr(lineBuf, '=');
-			if (!eq) continue;
-			*eq = '\0';
-			char* key = lineBuf;
-			char* val = eq + 1;
-
-			// skip whitespace
-			while (*key == ' ' || *key == '\t') key++;
-			char* keyEnd = eq - 1;
-			while (keyEnd > key && (keyEnd[0] == ' ' || keyEnd[0] == '\t')) keyEnd--;
-			keyEnd[1] = '\0';
-
-			while (*val == ' ' || *val == '\t') val++;
-
-			if (strcmp(key, "module") == 0) {
-				CopyCharToWchar(module, val, MAX_PATH - 1);
-			}
-			else if (strcmp(key, "offset") == 0) {
-				CopyCharToWchar(offsetStr, val, 31);
-			}
-			else if (strcmp(key, "dllPath") == 0) {
-				CopyCharToWchar(dllPath, val, MAX_PATH - 1);
-			}
-			else if (strcmp(key, "export") == 0) {
-				CopyCharToWchar(exportName, val, MAX_PATH - 1);
-			}
-		}
-
-		// calculate file name length mannually
-		USHORT fileNameLen = 0;
-		const wchar_t* p = module;
-		while (*p++) fileNameLen++;
-
-		// Remove .dll suffix if present
-		const wchar_t* dllSuffix = L".dll";
-		const size_t suffixLen = 4;
-		if (fileNameLen > suffixLen) {
-			// Check if ends with .dll (case insensitive)
-			bool hasDllSuffix = true;
-			for (size_t i = 0; i < suffixLen; i++) {
-				wchar_t c1 = module[fileNameLen - suffixLen + i];
-				wchar_t c2 = dllSuffix[i];
-				// Convert to lowercase for comparison
-				if (c1 >= L'A' && c1 <= L'Z') c1 = c1 + (L'a' - L'A');
-				if (c2 >= L'A' && c2 <= L'Z') c2 = c2 + (L'a' - L'A');
-				if (c1 != c2) {
-					hasDllSuffix = false;
-					break;
-				}
-			}
-			if (hasDllSuffix) {
-				fileNameLen -= suffixLen;
-			}
-		}
-
-		// calculate dllFnvHash
-		unsigned long long dllFnvHash = ComputeFnvHash(module, fileNameLen);
-
-		// construct event name and create
-		WCHAR loadEventName[MAX_PATH];
-		WCHAR hookEventName[MAX_PATH];
-		swprintf_s(loadEventName, NT_LOAD_NOTIFY_EVENT_FMT, processFnvHash, dllFnvHash);
-		swprintf_s(hookEventName, NT_HOOK_NOTIFY_EVENT_FMT, processFnvHash, dllFnvHash);
-		
 		UNICODE_STRING usLoad, usHook;
 		RtlInitUnicodeString(&usLoad, loadEventName);
 		RtlInitUnicodeString(&usHook, hookEventName);
@@ -1819,145 +1731,89 @@ static BOOL ScanDelayHookFiles(const WCHAR* ntPath, size_t byteLen) {
 		InitializeObjectAttributes(&oaLoad, &usLoad, OBJ_CASE_INSENSITIVE, NULL, NULL);
 		InitializeObjectAttributes(&oaHook, &usHook, OBJ_CASE_INSENSITIVE, NULL, NULL);
 
-		HANDLE hLoad = NULL;
-		HANDLE hHook = NULL;
+		HANDLE hLoad = NULL, hHook = NULL;
 		NTSTATUS st1 = NtOpenEvent(&hLoad, EVENT_MODIFY_STATE | SYNCHRONIZE, &oaLoad);
 		NTSTATUS st2 = NtOpenEvent(&hHook, EVENT_MODIFY_STATE | SYNCHRONIZE, &oaHook);
 		if (!NT_SUCCESS(st1) || !NT_SUCCESS(st2)) {
 			if (NT_SUCCESS(st1)) NtClose(hLoad);
 			if (NT_SUCCESS(st2)) NtClose(hHook);
-			break;
+			continue;
 		}
 
-		// 添加到链表
+		// Add to list
 		InstantHookTarget* node = (InstantHookTarget*)RtlAllocateHeap(GetProcessHeapFromPEB(), HEAP_ZERO_MEMORY, sizeof(InstantHookTarget));
 		if (node) {
-			wcscpy_s(node->targetDllName, module);
-			node->targetDllNameLen = fileNameLen;
+			wcscpy_s(node->targetDllName, e->module);
+			node->targetDllNameLen = nameLen;
 			node->dllFnvHash = dllFnvHash;
+			node->offset = offsetValue;
 			node->hLoadNotifyEvent = hLoad;
 			node->hHookNotifyEvent = hHook;
-			wcscpy_s(node->dllPath, dllPath);
+			wcscpy_s(node->dllPath, e->dllPath);
 			node->next = g_InstantHookList;
 			g_InstantHookList = node;
 		}
 	}
 
-	RtlFreeHeap(GetProcessHeapFromPEB(), 0, fileContent);
-	return TRUE;
+	return g_InstantHookList != nullptr;
 }
 
 void __fastcall LdrLoadDll_HookHandler(PVOID rcx, PVOID rdx, PVOID r8, PVOID r9, PVOID rsp) {
 	// DbgBreakPoint();
 	// rcx = PUNICODE_STRING DllName (LdrLoadDll 第一个参数 DllName)
-	PUNICODE_STRING fullDllName = NULL; 
+	PUNICODE_STRING fullDllName = NULL;
 #ifdef _DEBUG
 	fullDllName = (PUNICODE_STRING)*(DWORD64*)pGetRdi();
 #else
 	fullDllName = (PUNICODE_STRING)pGetRdi();
 #endif
 	// EtwLog(L"Dll=%s is loaded\n", fullDllName->Buffer);
-	if (fullDllName && fullDllName->Buffer && fullDllName->Length > 0) {
-		// DllName 本身就是文件名（如 ntdll.dll），不需要提取路径
-		USHORT charCount = fullDllName->Length / sizeof(WCHAR);
+	if (!fullDllName || !fullDllName->Buffer || fullDllName->Length == 0) return;
 
-			// Remove .dll suffix before computing hash
-			USHORT hashCharCount = charCount;
-			if (charCount > 4) {
-				// Check if ends with .dll (case insensitive)
-				bool hasDllSuffix = true;
-				for (int i = 0; i < 4; i++) {
-					WCHAR c = fullDllName->Buffer[charCount - 4 + i];
-					// Convert to lowercase
-					if (c >= L'A' && c <= L'Z') c = c + (L'a' - L'A');
-					WCHAR expected = L".dll"[i];
-					if (c != expected) {
-						hasDllSuffix = false;
-						break;
-					}
-				}
-				if (hasDllSuffix) {
-					hashCharCount -= 4;
-				}
+	USHORT hashCharCount = RemoveDllSuffixFromUnicodeString(fullDllName);
+	unsigned long long dllFnvHash = ComputeFnvHash(fullDllName->Buffer, hashCharCount);
+
+	// Traverse InstantHook list
+	InstantHookTarget** ppNode = &g_InstantHookList;
+	while (*ppNode) {
+		InstantHookTarget* node = *ppNode;
+		if (node->dllFnvHash == dllFnvHash) {
+			// Get current process path and calculate processFnvHash
+			ULONG returnLength = 0;
+			PBYTE buff[MAX_PATH * 4] = { 0 };
+			NTSTATUS status = NtQueryInformationProcess(
+				HANDLE(-1),
+				ProcessImageFileName,
+				buff,
+				MAX_PATH * 4,
+				&returnLength
+			);
+			unsigned long long processFnvHash = 0;
+			if (NT_SUCCESS(status)) {
+				UNICODE_STRING* us = (UNICODE_STRING*)buff;
+				processFnvHash = ComputeFnvHash(us->Buffer, us->Length / sizeof(WCHAR));
+
+				// Write current PID to hook event file
+				WriteHookEventFile(processFnvHash, dllFnvHash, node->offset);
 			}
-
-		unsigned long long dllFnvHash = ComputeFnvHash(fullDllName->Buffer, hashCharCount);
-
-		// Traverse InstantHook list
-		InstantHookTarget** ppNode = &g_InstantHookList;
-		while (*ppNode) {
-			InstantHookTarget* node = *ppNode;
-			if (node->dllFnvHash == dllFnvHash) {
-				// 用 RtlCompareUnicodeString 比较（避免调用 CRT wcscmp）
-				UNICODE_STRING targetUs;
-				targetUs.Buffer = node->targetDllName;
-				targetUs.Length = node->targetDllNameLen * sizeof(WCHAR);
-				targetUs.MaximumLength = targetUs.Length;
-
-
-					// Remove .dll suffix from fullDllName for comparison
-					UNICODE_STRING compareUs;
-					compareUs.Buffer = fullDllName->Buffer;
-					compareUs.Length = fullDllName->Length;
-					compareUs.MaximumLength = fullDllName->MaximumLength;
-
-					// Check if ends with .dll and adjust length
-					if (fullDllName->Length > 8) { // More than 4 WCHARs
-						USHORT charCount = fullDllName->Length / sizeof(WCHAR);
-						bool hasDllSuffix = true;
-						for (int i = 0; i < 4; i++) {
-							WCHAR c = fullDllName->Buffer[charCount - 4 + i];
-							if (c >= L'A' && c <= L'Z') c = c + (L'a' - L'A');
-							WCHAR expected = L".dll"[i];
-							if (c != expected) {
-								hasDllSuffix = false;
-								break;
-							}
-						}
-						if (hasDllSuffix) {
-							compareUs.Length -= 8; // Remove 4 WCHARs = 8 bytes
-						}
-					}
-
-				if (RtlCompareUnicodeString(&compareUs, &targetUs, TRUE) == 0) {
-					// // DbgBreakPoint();
-
-					// Get current process path and calculate processFnvHash
-					ULONG returnLength = 0;
-					PBYTE buff[MAX_PATH * 4] = { 0 };
-					NTSTATUS status = NtQueryInformationProcess(
-						HANDLE(-1),
-						ProcessImageFileName,
-						buff,
-						MAX_PATH * 4,
-						&returnLength
-					);
-
-					if (NT_SUCCESS(status)) {
-						UNICODE_STRING* us = (UNICODE_STRING*)buff;
-						unsigned long long processFnvHash = ComputeFnvHash(us->Buffer, us->Length / sizeof(WCHAR));
-
-						// Write current PID to hook event file
-						WriteHookEventFile(processFnvHash, dllFnvHash);
-					}
-
-					// Match! Signal LoadNotify and wait for HookNotify
-					if (node->hLoadNotifyEvent) {
-						NtSetEvent(node->hLoadNotifyEvent, NULL);
-					}
-					if (node->hHookNotifyEvent) {
-						// Wait for UMController to finish applying hook
-						NtWaitForSingleObject(node->hHookNotifyEvent, FALSE, NULL);
-						// Close handles and remove from list
-						CloseHandle(node->hLoadNotifyEvent);
-						CloseHandle(node->hHookNotifyEvent);
-						*ppNode = node->next;
-						HeapFree(GetProcessHeap(), 0, node);
-					}
-					return;
-				}
+			// Match! Signal LoadNotify and wait for HookNotify
+			if (node->hLoadNotifyEvent) {
+				EtwLog(L"signaling UMController that dll=%s is loaded with event=%llx.%llx.%llx\n", node->targetDllName, processFnvHash, dllFnvHash, node->offset);
+				NtSetEvent(node->hLoadNotifyEvent, NULL);
 			}
-			ppNode = &node->next;
+			if (node->hHookNotifyEvent) {
+				// Wait for UMController to finish applying hook
+				NtWaitForSingleObject(node->hHookNotifyEvent, FALSE, NULL);
+				EtwLog(L"being signaled that dll=%s is hooked with hook code dll=%s", node->targetDllName, node->dllPath);
+				// Close handles and remove from list
+				CloseHandle(node->hLoadNotifyEvent);
+				CloseHandle(node->hHookNotifyEvent);
+				*ppNode = node->next;
+				HeapFree(GetProcessHeap(), 0, node);
+				// Continue processing remaining nodes in the list
+				continue;
+			}
 		}
+		ppNode = &node->next;
 	}
 }

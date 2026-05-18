@@ -33,7 +33,6 @@
 #include "../HookCoreLib/HookCore.h"
 
 #include "../../Shared/DllLoadMonShared.h"
-#include "LdrLoadDllOffsets.h"
 #include "HookActions.h"
 
 #ifdef _DEBUG
@@ -559,10 +558,7 @@ public:
 		// Use stable HookRow-based reader which fills expFunc when present
 		return RegistryStore::ReadProcHookListRows(pid, filetimeHi, filetimeLo, outEntries);
 	}
-	DWORD64 CalculateNtdllLdrLoadDllRetOffset(DWORD processId, bool is64Bit) override {
-		// Delegate to the LdrLoadDllOffsets module which has MD5-based lookup table
-		return ::CalculateNtdllLdrLoadDllRetOffset(processId, is64Bit);
-	}
+	
 	bool WriteProcessMemoryWrap(
 		_In_ HANDLE hProcess,
 		_In_ LPVOID lpBaseAddress,
@@ -2062,7 +2058,7 @@ void CUMControllerDlg::OnSetInstantHook()
 
 		// Delete delay.hook file
 		WCHAR delayFile[MAX_PATH];
-		swprintf_s(delayFile, L"C:\\users\\public\\delay.hook.%016llx", processFnvHash);
+		swprintf_s(delayFile, UM_DELAY_HOOK_FILE_FMT, processFnvHash);
 		DeleteFileW(delayFile);
 
 		MessageBox(L"Instant Hook disabled successfully.", L"Success", MB_ICONINFORMATION);
@@ -2104,7 +2100,7 @@ void CUMControllerDlg::OnSetInstantHook()
 
 	// 6. Write C:\users\public\delay.hook.<processFnvHash> file
 	WCHAR delayFile[MAX_PATH];
-	swprintf_s(delayFile, L"C:\\users\\public\\delay.hook.%016llx", processFnvHash);
+	swprintf_s(delayFile, UM_DELAY_HOOK_FILE_FMT, processFnvHash);
 
 	// Copy hookseq content to delay.hook file
 	FILE* fin = NULL;

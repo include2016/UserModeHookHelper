@@ -74,9 +74,6 @@
     <ClInclude Include="RegistryStore.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="LdrLoadDllOffsets.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="UMController.rc">
@@ -140,7 +137,6 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="RemoveEarlyBreakDlg.cpp" />
-    <ClCompile Include="LdrLoadDllOffsets.cpp" />
     <ClCompile Include="InstantHookManager.cpp" />
   </ItemGroup>
 </Project>

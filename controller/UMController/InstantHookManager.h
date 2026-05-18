@@ -11,10 +11,11 @@ public:
         std::wstring processNtPath;
         unsigned long long processFnvHash;
         unsigned long long dllFnvHash;
+        unsigned long long offset;           // target offset for hooking
         std::wstring dllPath;             // hook code dll path
         std::wstring exportName;          // the export function of hook code dll
         std::wstring module;              // target module (the dll that will be monitored)
-        std::wstring offset;              // offset of target address for target dll base
+        std::wstring offsetStr;           // offset string (e.g. "0x220b0")
         std::wstring hookSeqPath;         // path to .hookseq file (for persistence)
     };
 

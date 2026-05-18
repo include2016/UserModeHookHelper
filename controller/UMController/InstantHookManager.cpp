@@ -188,8 +188,8 @@ void InstantHookManager::ListenerThreadImpl(ListenerContext* ctx) {
     // construct event names (only once)
     WCHAR loadEventName[MAX_PATH];
     WCHAR hookEventName[MAX_PATH];
-    swprintf_s(loadEventName, UM_LOAD_NOTIFY_EVENT_FMT, ctx->target.processFnvHash, ctx->target.dllFnvHash);
-    swprintf_s(hookEventName, UM_HOOK_NOTIFY_EVENT_FMT, ctx->target.processFnvHash, ctx->target.dllFnvHash);
+    swprintf_s(loadEventName, UM_LOAD_NOTIFY_EVENT_FMT, ctx->target.processFnvHash, ctx->target.dllFnvHash, ctx->target.offset);
+    swprintf_s(hookEventName, UM_HOOK_NOTIFY_EVENT_FMT, ctx->target.processFnvHash, ctx->target.dllFnvHash, ctx->target.offset);
 
     // Create/open events once at startup
     ctx->hLoadNotify = OpenEventW(SYNCHRONIZE | EVENT_MODIFY_STATE, FALSE, loadEventName);
@@ -243,8 +243,8 @@ void InstantHookManager::ListenerThreadImpl(ListenerContext* ctx) {
         DWORD pid = 0;
         // Read hook event file to get PID
         WCHAR hookEventPath[MAX_PATH];
-        swprintf_s(hookEventPath, L"C:\\users\\public\\hookevent.%016llx.%016llx",
-            ctx->target.processFnvHash, ctx->target.dllFnvHash);
+        swprintf_s(hookEventPath, UM_HOOK_EVENT_PID_FILE_FMT,
+            ctx->target.processFnvHash, ctx->target.dllFnvHash, ctx->target.offset);
 
         FILE* hookEventFile = NULL;
         _wfopen_s(&hookEventFile, hookEventPath, L"rt");
@@ -304,14 +304,8 @@ void InstantHookManager::ListenerThreadImpl(ListenerContext* ctx) {
             continue;  // Continue to next iteration
         }
 
-        // parse offset
-        bool ok = false;
-        DWORD64 offset = ParseAddressText(ctx->target.offset.c_str(), ok);
-        if (!ok) {
-            LOG_CTRL_INSHOOK(L"failed to parse target offset\n");
-            SetEvent(ctx->hHookNotify);
-            continue;  // Continue to next iteration
-        }
+        // use pre-parsed offset
+        DWORD64 offset = ctx->target.offset;
 
         // verify export
         DWORD hookCodeOffset = 0;
@@ -459,8 +453,11 @@ bool InstantHookManager::ParseHookSeqFile(const wchar_t* filePath, std::vector<H
             hasModule = true;
         }
         else if (wcscmp(key, L"offset") == 0) {
-            target.offset = std::wstring(val);
-            hasOffset = true;
+            target.offsetStr = std::wstring(val);
+            // Parse offset string to numeric value
+            bool ok = false;
+            target.offset = ParseAddressText(val, ok);
+            hasOffset = ok;
         }
         else if (wcscmp(key, L"dllPath") == 0) {
             target.dllPath = val;
