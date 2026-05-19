@@ -16,7 +16,7 @@
 typedef PVOID(*PFNGetRdi)();
 PFNGetRdi pGetRdi;
 VOID CopyCharToWchar(WCHAR* dst, CHAR* src, SIZE_T len) {
-	for (size_t i = 0; i < len && src[i]!=0xd && src[i]!=0xa; i++) {
+	for (size_t i = 0; i < len && src[i] != 0xd && src[i] != 0xa; i++) {
 		*((CHAR*)dst + i * sizeof(WCHAR)) = src[i];
 	}
 }
@@ -75,13 +75,13 @@ static DWORD FindHookOffset(PVOID ldrLoadDllAddr) {
 
 	uint64_t retAddr = 0;
 	while (cs_disasm_iter(handle, &code_ptr, &remaining, &rip, ins)) {
-		 
+
 		// Check for RET instruction
 		if (ins->id == X86_INS_RET) {
 			retAddr = ins->address;
 			break;
 		}
-		firstFiveAddrs[firstFiveCount%5] = ins->address;
+		firstFiveAddrs[firstFiveCount % 5] = ins->address;
 		firstFiveCount++;
 	}
 
@@ -91,7 +91,7 @@ static DWORD FindHookOffset(PVOID ldrLoadDllAddr) {
 		return 0;
 	}
 
-	for (size_t i = firstFiveCount-1,j=0; j<5; j++,i--) {
+	for (size_t i = firstFiveCount - 1, j = 0; j < 5; j++, i--) {
 		if (retAddr - firstFiveAddrs[i % 5] >= MIN_HOOK_BYTES)
 			return (DWORD)(firstFiveAddrs[i % 5] - (DWORD64)ldrLoadDllAddr);
 	}
@@ -928,7 +928,7 @@ OnProcessAttach(
 		}
 	}
 
-	
+
 	// for now we only support x64
 #ifdef _WIN64
 
@@ -939,7 +939,7 @@ OnProcessAttach(
 		// first check if dealy_hook.hash exist, we can reuse CheckSignalFile, only change format
 		if (CheckSignalFile((UCHAR*)ntPath, len, DELAY_HOOK_SIGNAL_FILE_FMT, TRUE)) {
 			// write place holder function to GetRdi code: mov rax, rdi; ret
-			{ 
+			{
 				// DbgBreakPoint();
 				PVOID function_addr = &GetRdi;
 #ifdef _DEBUG
@@ -1438,16 +1438,42 @@ static USHORT RemoveDllSuffix(const wchar_t* module, USHORT len) {
 	return len - 4;
 }
 
-// Helper: remove .dll suffix from UNICODE_STRING, return new char count
-static USHORT RemoveDllSuffixFromUnicodeString(const UNICODE_STRING* us) {
-	if (!us || !us->Buffer || us->Length < 10) return us ? us->Length / sizeof(WCHAR) : 0;
+// Helper: remove path and .dll suffix from UNICODE_STRING, return new char count (filename only, without .dll)
+static USHORT RemoveDllSuffixFromUnicodeString(const UNICODE_STRING* us, ULONG* forward) {
+	if (!us || !us->Buffer) return 0;
 	USHORT charCount = us->Length / sizeof(WCHAR);
-	for (int i = 0; i < 4; i++) {
-		WCHAR c = us->Buffer[charCount - 4 + i];
-		if (c >= L'A' && c <= L'Z') c += L'a' - L'A';
-		if (c != L".dll"[i]) return charCount;
+	if (charCount == 0) return 0;
+
+	// Find the last path separator (backslash or forward slash)
+	USHORT startIdx = 0;
+	for (USHORT i = charCount; i > 0; i--) {
+		WCHAR c = us->Buffer[i - 1];
+		if (c == L'\\' || c == L'/') {
+			startIdx = i; // Start after the separator
+			break;
+		}
 	}
-	return charCount - 4;
+	*forward = startIdx;
+	// Calculate length of filename portion only
+	USHORT filenameLen = charCount - startIdx;
+
+	// Check for .dll suffix (case insensitive)
+	if (filenameLen >= 4) {
+		bool isDll = true;
+		for (int i = 0; i < 4; i++) {
+			WCHAR c = us->Buffer[startIdx + filenameLen - 4 + i];
+			if (c >= L'A' && c <= L'Z') c += L'a' - L'A';
+			if (c != L".dll"[i]) {
+				isDll = false;
+				break;
+			}
+		}
+		if (isDll) {
+			filenameLen -= 4;
+		}
+	}
+
+	return filenameLen;
 }
 
 // Helper: parse hex string to unsigned long long
@@ -1486,13 +1512,13 @@ static int ParseHookSeqContent(const char* content, size_t len, HookEntry* entri
 		char* ascii_content = (char*)content;
 		size_t j = 0;
 		for (size_t i = 0; i < len - 2; i += 2, j++) {
-			ascii_content[j]= content[i];
+			ascii_content[j] = content[i];
 		}
 
 		p = ascii_content;
 		end = ascii_content + j;
 	}
-	
+
 	while (p < end && count < maxEntries) {
 		// Skip whitespace and comments
 		while (p < end) {
@@ -1522,7 +1548,7 @@ static int ParseHookSeqContent(const char* content, size_t len, HookEntry* entri
 			}
 
 			// Read line
-			char lineBuf[MAX_PATH * 2] = {0};
+			char lineBuf[MAX_PATH * 2] = { 0 };
 			SIZE_T lineLen = 0;
 			while (p < end && *p != '\n' && *p != '\r' && lineLen < sizeof(lineBuf) - 1) {
 				lineBuf[lineLen++] = *p++;
@@ -1545,7 +1571,7 @@ static int ParseHookSeqContent(const char* content, size_t len, HookEntry* entri
 			// Trim value
 			while (*val == ' ' || *val == '\t') val++;
 			size_t valLen = strlen(val);
-			while (valLen > 0 && (val[valLen-1] == ' ' || val[valLen-1] == '\t')) val[--valLen] = '\0';
+			while (valLen > 0 && (val[valLen - 1] == ' ' || val[valLen - 1] == '\t')) val[--valLen] = '\0';
 
 			// Store
 			if (strcmp(key, "module") == 0) CopyCharToWchar(entry->module, val, MAX_PATH - 1);
@@ -1561,6 +1587,110 @@ static int ParseHookSeqContent(const char* content, size_t len, HookEntry* entri
 	}
 
 	return count;
+}
+
+// Convert NT path to DOS path by querying \Global?? directory
+// Returns true if conversion successful, false otherwise
+static bool NtPathToDosPath(const WCHAR* ntPath, WCHAR* dosPath, SIZE_T dosPathSize) {
+	// NT path format: \Device\HarddiskVolume2\path\file.exe
+	// We need to find which drive letter maps to \Device\HarddiskVolume2
+
+	OBJECT_ATTRIBUTES oa;
+	UNICODE_STRING dirName;
+	RtlInitUnicodeString(&dirName, L"\\Global??");
+	InitializeObjectAttributes(&oa, &dirName, OBJ_CASE_INSENSITIVE, NULL, NULL);
+
+	HANDLE hDir = NULL;
+	NTSTATUS status = NtOpenDirectoryObject(&hDir, DIRECTORY_QUERY, &oa);
+	if (!NT_SUCCESS(status)) {
+		return false;
+	}
+
+	// Find the device name portion (e.g., \Device\HarddiskVolume2)
+
+
+	const WCHAR* pathPart = ntPath;
+
+	// skip \Device
+	pathPart = wcschr(pathPart + 1, L'\\');
+	if (!pathPart) {
+		NtClose(hDir);
+		return false;
+	}
+
+	// skip \HarddiskVolumeX
+	pathPart = wcschr(pathPart + 1, L'\\');
+	if (!pathPart) {
+		NtClose(hDir);
+		return false;
+	}
+
+	SIZE_T deviceNameLen = (pathPart - ntPath) * sizeof(WCHAR);
+
+
+
+
+	// Query directory entries
+	ULONG context = 0;
+	ULONG returnLength = 0;
+	BYTE buffer[1024];
+	bool found = false;
+
+	for (;;) {
+		status = NtQueryDirectoryObject(hDir, buffer, sizeof(buffer), FALSE, FALSE, &context, &returnLength);
+		if (!NT_SUCCESS(status)) {
+			break;
+		}
+
+		OBJECT_DIRECTORY_INFORMATION* entry = (OBJECT_DIRECTORY_INFORMATION*)buffer;
+		while (entry->Name.Buffer != NULL) {
+			// Check if this is a symbolic link (drive letter, like "C:")
+			if (entry->TypeName.Length == sizeof(L"SymbolicLink") - sizeof(WCHAR) &&
+				wcsncmp(entry->TypeName.Buffer, L"SymbolicLink", entry->TypeName.Length / sizeof(WCHAR)) == 0) {
+
+				// Open the symbolic link to get its target
+				UNICODE_STRING linkName;
+				RtlInitUnicodeString(&linkName, entry->Name.Buffer);
+				OBJECT_ATTRIBUTES linkOa;
+				InitializeObjectAttributes(&linkOa, &linkName, OBJ_CASE_INSENSITIVE, hDir, NULL);
+
+				HANDLE hLink = NULL;
+				NTSTATUS linkStatus = NtOpenSymbolicLinkObject(&hLink, SYMBOLIC_LINK_QUERY, &linkOa);
+				if (NT_SUCCESS(linkStatus)) {
+					WCHAR targetBuffer[MAX_PATH];
+					UNICODE_STRING targetUs;
+					targetUs.Buffer = targetBuffer;
+					targetUs.Length = 0;
+					targetUs.MaximumLength = sizeof(targetBuffer);
+
+					ULONG targetLen = 0;
+					if (NT_SUCCESS(NtQuerySymbolicLinkObject(hLink, &targetUs, &targetLen))) {
+
+						// Check if this link target matches our NT path device
+						if (targetUs.Length == deviceNameLen &&
+							_wcsnicmp(targetUs.Buffer, ntPath, deviceNameLen / sizeof(WCHAR)) == 0) {
+
+							// Found! Build DOS path: drive_letter: + rest of path
+							if (entry->Name.Length == 4 && entry->Name.Buffer[1] == L':') {
+								// Entry name is like "C:"
+								swprintf_s(dosPath, dosPathSize, L"%s%s", entry->Name.Buffer, pathPart);
+								found = true;
+								NtClose(hLink);
+								break;
+							}
+						}
+					}
+					NtClose(hLink);
+				}
+			}
+			entry++;
+		}
+
+		if (found) break;
+	}
+
+	NtClose(hDir);
+	return found;
 }
 
 static bool LoadTrampolineDll(PFN_LdrLoadDll pLdrLoadDll) {
@@ -1585,7 +1715,7 @@ static bool LoadTrampolineDll(PFN_LdrLoadDll pLdrLoadDll) {
 	cid.UniqueThread = NULL;
 
 	InitializeObjectAttributes(&oa, NULL, 0, NULL, NULL);
-	NTSTATUS status = NtOpenProcess(&hProcess, PROCESS_QUERY_INFORMATION, &oa, &cid);
+	NTSTATUS status = NtOpenProcess(&hProcess, PROCESS_QUERY_LIMITED_INFORMATION, &oa, &cid);
 
 	if (!NT_SUCCESS(status)) {
 		return false;
@@ -1620,43 +1750,27 @@ static bool LoadTrampolineDll(PFN_LdrLoadDll pLdrLoadDll) {
 				*(lastSlash + 1) = L'\0';
 
 				// Convert NT path to DOS path format
-				// NT path: \Device\HarddiskVolume2\path
-				// DOS path: C:\path
 				WCHAR dosPath[MAX_PATH];
 				RtlZeroMemory(dosPath, sizeof(dosPath));
 
-				if (wcsncmp(processPath, L"\\Device\\HarddiskVolume", 22) == 0) {
-					// Find volume number
-					WCHAR* volumeNumStart = processPath + 22;
-					ULONG volumeNum = 0;
-					WCHAR* p = volumeNumStart;
-					while (*p >= L'0' && *p <= L'9') {
-						volumeNum = volumeNum * 10 + (*p - L'0');
-						p++;
+				if (NtPathToDosPath(processPath, dosPath, MAX_PATH)) {
+					// Append trampoline DLL name
+					WCHAR trampDllPath[MAX_PATH];
+					swprintf_s(trampDllPath, L"%s%s", dosPath, TRAMP_X64_DLL);
+
+					// Load trampoline.dll
+					UNICODE_STRING trampPathUs;
+					RtlInitUnicodeString(&trampPathUs, trampDllPath);
+					HANDLE hTramp = NULL;
+					ULONG flags = 0;
+					NTSTATUS trampStatus = pLdrLoadDll(NULL, &flags, &trampPathUs, &hTramp);
+					if (!NT_SUCCESS(trampStatus)) {
+						EtwLog(L"Failed to load trampoline.dll: %s, status=0x%x\n", trampDllPath, trampStatus);
 					}
-					// Simple mapping: volume 2 = C, volume 3 = D, etc.
-					WCHAR driveLetter = (WCHAR)(L'C' + (volumeNum > 1 ? volumeNum - 2 : 0));
-
-					// Build DOS path: C:\path
-					swprintf_s(dosPath, L"%c:%s", driveLetter, volumeNumStart + 1);
-				}
-
-				// Append trampoline DLL name
-				WCHAR trampDllPath[MAX_PATH];
-				swprintf_s(trampDllPath, L"%s%s", dosPath, TRAMP_X64_DLL);
-
-				// Load trampoline.dll
-				UNICODE_STRING trampPathUs;
-				RtlInitUnicodeString(&trampPathUs, trampDllPath);
-				HANDLE hTramp = NULL;
-				ULONG flags = 0;
-				NTSTATUS trampStatus = pLdrLoadDll(NULL, &flags, &trampPathUs, &hTramp);
-				if (!NT_SUCCESS(trampStatus)) {
-					EtwLog(L"Failed to load trampoline.dll: %s, status=0x%x\n", trampDllPath, trampStatus);
-				}
-				else {
-					EtwLog(L"Successfully loaded trampoline.dll: %s\n", trampDllPath);
-					result = true;
+					else {
+						EtwLog(L"Successfully loaded trampoline.dll: %s\n", trampDllPath);
+						result = true;
+					}
 				}
 			}
 		}
@@ -1737,6 +1851,7 @@ static BOOL ScanDelayHookFiles(const WCHAR* ntPath, size_t byteLen) {
 		if (!NT_SUCCESS(st1) || !NT_SUCCESS(st2)) {
 			if (NT_SUCCESS(st1)) NtClose(hLoad);
 			if (NT_SUCCESS(st2)) NtClose(hHook);
+			EtwLog(L"Failed to open hook/load notify event, check if UMController is running\n");
 			continue;
 		}
 
@@ -1767,11 +1882,12 @@ void __fastcall LdrLoadDll_HookHandler(PVOID rcx, PVOID rdx, PVOID r8, PVOID r9,
 #else
 	fullDllName = (PUNICODE_STRING)pGetRdi();
 #endif
-	// EtwLog(L"Dll=%s is loaded\n", fullDllName->Buffer);
 	if (!fullDllName || !fullDllName->Buffer || fullDllName->Length == 0) return;
 
-	USHORT hashCharCount = RemoveDllSuffixFromUnicodeString(fullDllName);
-	unsigned long long dllFnvHash = ComputeFnvHash(fullDllName->Buffer, hashCharCount);
+	ULONG forward = 0;
+	USHORT hashCharCount = RemoveDllSuffixFromUnicodeString(fullDllName, &forward);
+	// EtwLog(L"Dll=%s is loaded\n", fullDllName->Buffer + forward);
+	unsigned long long dllFnvHash = ComputeFnvHash(fullDllName->Buffer + forward, hashCharCount);
 
 	// Traverse InstantHook list
 	InstantHookTarget** ppNode = &g_InstantHookList;
