@@ -24,9 +24,4 @@
       <Filter>Resource Files</Filter>
     </ResourceCompile>
   </ItemGroup>
-  <ItemGroup>
-    <MASM Include="ShortAsmCode.asm">
-      <Filter>Source Files</Filter>
-    </MASM>
-  </ItemGroup>
 </Project>

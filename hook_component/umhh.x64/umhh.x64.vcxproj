@@ -178,9 +178,6 @@
     <ClCompile Include="dllmain.cpp" />
     <ResourceCompile Include="umhh.rc" />
   </ItemGroup>
-  <ItemGroup>
-    <MASM Include="ShortAsmCode.asm" />
-  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />
 </Project>

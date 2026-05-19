@@ -396,7 +396,9 @@ namespace PHLIB {
 					mode_path
 				)) {
 					PHLog(L"failed to call PhpEnumProcessModules32Callback\n");
-					break;
+					currentLink = currentEntry.InLoadOrderLinks.Flink;
+					i++;
+					continue;
 				}
 				if (wstrcasestr_check(mode_path, target_module)) {
 					*ModuleBase = currentEntry.DllBase;
