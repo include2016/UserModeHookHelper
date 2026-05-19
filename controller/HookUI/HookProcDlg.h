@@ -11,8 +11,6 @@
 #include "HookUIResource.h"
 #include "../../Shared/HookRow.h"
 #include "../../Shared/HookServices.h"
-#include <unordered_map>
-#include "../../Shared/HookServices.h"
 #include "DllLoadMonManager.h"
 
 class HookProcDlg : public CDialogEx {
@@ -55,46 +53,12 @@ private:
     bool m_draggingSplitter = false;
     int m_splitterWidth = 6;
     void UpdateLayoutForSplitter(int cx, int cy);
-    int m_sortColumn=0; bool m_sortAscending=true; static int CALLBACK ModuleCompare(LPARAM, LPARAM, LPARAM);
-    // Delay Hook 相关数据结构和成员
-    struct PendingHookKey {
-        DWORD pid;
-        std::wstring moduleName;
-        bool operator==(const PendingHookKey& other) const {
-            return pid == other.pid && moduleName == other.moduleName;
-        }
-    };
-    
-    struct PendingHookKeyHash {
-        size_t operator()(const PendingHookKey& k) const noexcept {
-            return std::hash<DWORD>()(k.pid) ^ std::hash<std::wstring>()(k.moduleName);
-        }
-    };
-    
-    // Pending hooks 存储
-    std::unordered_map<PendingHookKey, std::vector<PendingHook>, PendingHookKeyHash> m_PendingHooks;
-    
-    // DllLoadMon manager for delayed hooking
-    DllLoadMonManager m_DllLoadMonMgr;
-    
-    // 监控线程参数
-    struct MonitorParams {
-        DWORD processId;
-        HANDLE hProcess;
-        HANDLE hEventLoad;
-        HANDLE hEventRelease;
-        std::wstring moduleName;
-        HookProcDlg* pDlg;  // 指向对话框实例
-    };
-    
-    // 延迟钩子监控线程
-    static DWORD WINAPI DelayHookMonitorThread(LPVOID lpParam);
-    
-    // 辅助函数声明
-    void ApplyPendingHooks(DWORD pid, const std::wstring& moduleName);
-    bool ApplySinglePendingHook(const PendingHook& hook);
-    
-    // 原有成员
+	int m_sortColumn=0; bool m_sortAscending=true; static int CALLBACK ModuleCompare(LPARAM, LPARAM, LPARAM);
+
+	// DllLoadMon manager for delayed hooking
+	DllLoadMonManager m_DllLoadMonMgr;
+
+	// 原有成员
     void PopulateHookList();
     int AddHookEntry(const HookRow& row);
 	ULONG64 m_exp_num_tracker_bitfield[4] = {};

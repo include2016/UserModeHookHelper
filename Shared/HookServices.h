@@ -10,17 +10,6 @@
 
 #include "HookRow.h"
 
-// Structure to represent a pending hook for a module that's not yet loaded
-struct PendingHook {
-    DWORD pid;
-    std::wstring module;      // Module name (e.g., "ntdll.dll")
-    std::wstring offset;      // Offset as string (e.g., "0x1234")
-    std::wstring dllPath;     // Full path to hook code DLL
-    std::wstring exportName;  // Export function name
-    ULONGLONG address;        // Resolved address (filled when module loads)
-    HookRow hookRow;          // HookRow data for applying the hook
-};
-
 // Unified IHookServices interface shared by UMController, HookUI, and HookCoreLib.
 // Provides two logging channels: general (Log) and hook-core diagnostics (LogCore).
 struct IHookServices {

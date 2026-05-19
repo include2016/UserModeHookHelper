@@ -2122,11 +2122,19 @@
 #define AFX_IDP_E_SEARCHTEXTNOTFOUND    0xFEC6
 #define AFX_IDP_E_REPLACEMENTSTOOLONG   0xFEC7
 #define SPVERSION_MASK                  0x0000FF00
+#ifndef HTERROR
 #define HTERROR                         -2
+#endif
+#ifndef PWR_FAIL
 #define PWR_FAIL                        -1
+#endif
 #define UNICODE_NOCHAR                  0xFFFF
+#ifndef HTTRANSPARENT
 #define HTTRANSPARENT                   -1
+#endif
+#ifndef IDC_STATIC
 #define IDC_STATIC                      -1
+#endif
 
 // Next default values for new objects
 // 
