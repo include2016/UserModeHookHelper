@@ -13,6 +13,7 @@
 #include "../../drivers/UserModeHookHelper/UKShared.h"
 #include "detours/detours.h"
 #include "capstone/capstone.h"
+VOID EtwLog(_In_ PCWSTR Format, ...);
 typedef PVOID(*PFNGetRdi)();
 PFNGetRdi pGetRdi;
 VOID CopyCharToWchar(WCHAR* dst, CHAR* src, SIZE_T len) {
@@ -20,16 +21,25 @@ VOID CopyCharToWchar(WCHAR* dst, CHAR* src, SIZE_T len) {
 		*((CHAR*)dst + i * sizeof(WCHAR)) = src[i];
 	}
 }
+VOID CopyCharToWcharForIns(WCHAR* dst, CHAR* src, SIZE_T len) {
+	for (size_t i = 0; src[i]!='\0'; i++) {
+		*((CHAR*)dst + i * sizeof(WCHAR)) = src[i];
+	}
+}
 static PVOID GetProcessHeapFromPEB() {
 #if defined(_WIN64)
 	return (PVOID)*(ULONG_PTR*)((ULONG_PTR)__readgsqword(0x60) + 0x30);
 #else
-	return (PVOID)*(ULONG_PTR*)((ULONG_PTR)__readfsdword(0x30) + 0x30);
+	return (PVOID)*(ULONG_PTR*)((ULONG_PTR)__readfsdword(0x30) + 0x18);
 #endif
 }
 
-// Minimum bytes needed for inline hook: movabs rcx, addr (10) + jmp rcx (2) = 12
-#define MIN_HOOK_BYTES 12
+// Minimum bytes needed for inline hook
+#ifdef _WIN64
+#define MIN_HOOK_BYTES 12  // movabs rcx, addr (10) + jmp rcx (2) = 12
+#else
+#define MIN_HOOK_BYTES 7   // jmp rel32 (E9 <4bytes>) = 5
+#endif
 static bool WriteJump(PVOID addr, PVOID target);
 
 // InstantHook target list (for delay hook feature)
@@ -60,22 +70,31 @@ static DWORD FindHookOffset(PVOID ldrLoadDllAddr) {
 	}
 
 	csh handle;
+#ifdef _WIN64
 	if (cs_open(CS_ARCH_X86, CS_MODE_64, &handle) != CS_ERR_OK) {
+#else
+	if (cs_open(CS_ARCH_X86, CS_MODE_32, &handle) != CS_ERR_OK) {
+#endif
 		return 0;
 	}
 
 	cs_insn* ins = cs_malloc(handle);
+#ifdef _WIN64
 	uint64_t rip = (uint64_t)ldrLoadDllAddr;
+#else
+	uint64_t eip = (uint64_t)ldrLoadDllAddr;
+#define rip eip
+#endif
 	const uint8_t* code_ptr = codeBuf;
 	size_t remaining = bytesRead;
 
-	// Record first 5 instructions
+#ifdef _WIN64
+	// x64: Record first 5 instructions before RET
 	uint64_t firstFiveAddrs[5] = { 0 };
 	int firstFiveCount = 0;
 
 	uint64_t retAddr = 0;
 	while (cs_disasm_iter(handle, &code_ptr, &remaining, &rip, ins)) {
-
 		// Check for RET instruction
 		if (ins->id == X86_INS_RET) {
 			retAddr = ins->address;
@@ -95,9 +114,83 @@ static DWORD FindHookOffset(PVOID ldrLoadDllAddr) {
 		if (retAddr - firstFiveAddrs[i % 5] >= MIN_HOOK_BYTES)
 			return (DWORD)(firstFiveAddrs[i % 5] - (DWORD64)ldrLoadDllAddr);
 	}
+#else
+	// x86: Find RET, then search backwards for first CALL instruction,
+	// then from CALL search backwards until we have at least 7 bytes space before RET.
+	//
+	// Typical x86 LdrLoadDll epilogue:
+	//   ...
+	//   call    ntdll!RtlRetrieveNtUserPfn+0x100
+	//   mov     esp, ebp      ; 8B E5 (2 bytes)
+	//   pop     ebp           ; 5D (1 byte)
+	//   ret     10h           ; C2 10 00 (3 bytes)
+	//
+	// We want to hook BEFORE the CALL instruction.
+
+	// First pass: collect all instructions and find RET
+	uint64_t instrAddrs[256] = { 0 };
+	x86_insn instrIds[256] = { X86_INS_INVALID };
+	int instrCount = 0;
+	uint64_t retAddr = 0;
+	int retIndex = -1;
+
+	while (cs_disasm_iter(handle, &code_ptr, &remaining, &rip, ins)) {
+		if (instrCount < 256) {
+			instrAddrs[instrCount] = ins->address;
+			instrIds[instrCount] = (x86_insn)ins->id;
+		}
+
+		if (ins->id == X86_INS_RET) {
+			retAddr = ins->address;
+			retIndex = instrCount;
+			break;
+		}
+		instrCount++;
+	}
+
+	if (retAddr == 0 || retIndex < 0) {
+		cs_free(ins, 1);
+		cs_close(&handle);
+		return 0;
+	}
+
+	// Second pass: search backwards from RET to find first CALL instruction
+	int callIndex = -1;
+	for (int i = retIndex - 1; i >= 0; i--) {
+		if (instrIds[i] == X86_INS_CALL) {
+			retAddr = instrAddrs[i];
+			callIndex = i;
+			break;
+		}
+	}
+
+	if (callIndex < 0) {
+		// No CALL found, return 0 indicates error
+		cs_free(ins, 1);
+		cs_close(&handle);
+		return 0;
+	}
+
+	// Third pass: from CALL instruction, search backwards until we have at least 7 bytes
+	// (MIN_HOOK_BYTES for x86 is 5, but we want 7 for additional instructions)
+	for (int i = callIndex; i >= 0; i--) {
+		if (retAddr - instrAddrs[i] >= MIN_HOOK_BYTES) {
+			cs_free(ins, 1);
+			cs_close(&handle);
+			return (DWORD)(instrAddrs[i] - (DWORD32)ldrLoadDllAddr);
+		}
+	}
 
 	cs_free(ins, 1);
 	cs_close(&handle);
+	return 0;
+#endif
+
+	cs_free(ins, 1);
+	cs_close(&handle);
+#ifndef _WIN64
+#undef rip
+#endif
 	return 0;
 }
 
@@ -113,7 +206,7 @@ bool ApplyLocalHook(
 	_Out_ DWORD*  outOriLen
 );
 void __fastcall LdrLoadDll_HookHandler(PVOID rcx, PVOID rdx, PVOID r8, PVOID r9, PVOID rsp);
-VOID EtwLog(_In_ PCWSTR Format, ...);
+
 static BOOL GetNtdllFnvHash(WCHAR* hashStr, DWORD hashStrSize);
 typedef int(__cdecl * _snwprintf_fn_t)(
 	wchar_t *buffer,
@@ -149,6 +242,17 @@ PVOID GetRdi() {
 	EtwLog(L"this is just palceholder function\n");
 	return NULL;
 }
+
+#ifndef _WIN64
+// x86: placeholder function to get first argument from stack
+// Will be overwritten with: mov eax, [esp+4]; ret
+PVOID GetFirstArg() {
+	EtwLog(L"this is just placeholder function for x86\n");
+	return NULL;
+}
+typedef PVOID(*PFNGetFirstArg)();
+PFNGetFirstArg pGetFirstArg;
+#endif
 HANDLE g_EventHandle;
 typedef NTSTATUS(NTAPI *PFN_NtDelayExecution)(
 	BOOLEAN Alertable,        // TRUE = APCs can wake the thread
@@ -593,7 +697,7 @@ endloop:
 
 
 NTSTATUS AgentCode(_In_ PVOID ThreadParameter) {
-	// 
+	
 
 	UNICODE_STRING NtdllPath;
 	RtlInitUnicodeString(&NtdllPath, (PWSTR)L"ntdll.dll");
@@ -929,16 +1033,16 @@ OnProcessAttach(
 	}
 
 
-	// for now we only support x64
-#ifdef _WIN64
-
-	 // we need to hook ldrloaddll before ret and get unicode string from rdi
-	 // we can use capstone to locate ret instruction and search back to get enough space to write
-	 // trampoline code
-	do {
-		// first check if dealy_hook.hash exist, we can reuse CheckSignalFile, only change format
+			// LdrLoadDll delay hook - now supports both x64 and x86
+		// x64: hook before ret, get unicode string from rdi
+		// x86: hook before ret, get unicode string from first stack parameter
+		// We use capstone to locate ret instruction and search back to get enough space to write trampoline code
+		do {
+			DbgBreakPoint();
+			// first check if dealy_hook.hash exist, we can reuse CheckSignalFile, only change format
 		if (CheckSignalFile((UCHAR*)ntPath, len, DELAY_HOOK_SIGNAL_FILE_FMT, TRUE)) {
-			// write place holder function to GetRdi code: mov rax, rdi; ret
+#ifdef _WIN64
+			// x64: write place holder function to GetRdi code: mov rax, rdi; ret
 			{
 				// DbgBreakPoint();
 				PVOID function_addr = &GetRdi;
@@ -956,12 +1060,36 @@ OnProcessAttach(
 					EtwLog(L"failed to call NtProtectVirtualMemory target page_base=0x%p\n", page_base);
 					break;
 				}
+				// mov rax, rdi; ret
 				UCHAR code[4] = { 0x48, 0x89, 0xF8, 0xC3 };
 				NtWriteVirtualMemory(NtCurrentProcess(), function_addr, (PVOID)code, 4, (PSIZE_T)&written);
 
 				DWORD tmp;
 				NtProtectVirtualMemory(NtCurrentProcess(), &page_base, &protLen, oldProt, &tmp);
 			}
+#else
+			// x86: write place holder function to GetFirstArg code: mov eax, [esp+4]; ret
+			{
+				PVOID function_addr = &GetFirstArg;
+				pGetFirstArg = (PFNGetFirstArg)function_addr;
+				// align down, a page is 4KB
+				PVOID page_base = (PVOID)((DWORD32)function_addr & (~0xFFF));
+				DWORD oldProt = 0;
+				DWORD written = 0;
+				SIZE_T protLen = 0x1000;
+				if (0 != NtProtectVirtualMemory(NtCurrentProcess(), &page_base, &protLen, PAGE_EXECUTE_READWRITE, &oldProt)) {
+					EtwLog(L"failed to call NtProtectVirtualMemory target page_base=0x%p\n", page_base);
+					break;
+				}
+				// mov eax, ebx; ret
+				// { 0x89, 0xD8, 0xC3 }
+				UCHAR code[3] = { 0x89, 0xD8, 0xC3 };
+				NtWriteVirtualMemory(NtCurrentProcess(), function_addr, (PVOID)code, 3, (PSIZE_T)&written);
+
+				DWORD tmp;
+				NtProtectVirtualMemory(NtCurrentProcess(), &page_base, &protLen, oldProt, &tmp);
+			}
+#endif
 			// we already have LdrLoadDll function address: pLdrLoadDll
 			DWORD hook_offset = 0;
 			// Scan delay.hook files and build InstantHook list
@@ -1013,9 +1141,13 @@ OnProcessAttach(
 			{
 				DWORD oldProt = 0;
 				SIZE_T protLen = 0x1000;
-				DWORD trampSize = 128;  // ← Move here (outside inner block)
+				DWORD trampSize = 128;
 
+#ifdef _WIN64
 				PVOID page_base = (PVOID)((DWORD64)hookAddr & (~0xFFF));
+#else
+				PVOID page_base = (PVOID)((DWORD32)hookAddr & (~0xFFF));
+#endif
 
 				NtProtectVirtualMemory(NtCurrentProcess(), &page_base, &protLen, PAGE_EXECUTE_READWRITE, &oldProt);
 
@@ -1026,14 +1158,12 @@ OnProcessAttach(
 				if (!ok) {
 					SIZE_T z = 0;
 					NtFreeVirtualMemory(NtCurrentProcess(), &tramp, (PSIZE_T)&trampSize, MEM_RELEASE);
-					return STATUS_UNSUCCESSFUL;  // Also fix return type
+					return STATUS_UNSUCCESSFUL;
 				}
 				break;
 			}
 		}
 	} while (false);
-
-#endif
 	RtlCreateUserThread(NtCurrentProcess(),
 		NULL,
 		FALSE,
@@ -1203,6 +1333,7 @@ BOOLEAN GetNtPathOfCurrentProcess(HANDLE NtdllHandle, wchar_t* ntPath, size_t* o
 }
 
 static bool WriteJump(PVOID addr, PVOID target) {
+#ifdef _WIN64
 	BYTE code[12] = {
 		0x48, 0xB9, 0, 0, 0, 0, 0, 0, 0, 0, // movabs rcx, target
 		0xFF, 0xE1                               // jmp rcx
@@ -1210,6 +1341,14 @@ static bool WriteJump(PVOID addr, PVOID target) {
 	*(uint64_t*)&code[2] = (uint64_t)target;
 	SIZE_T written = 0;
 	return NT_SUCCESS(NtWriteVirtualMemory(NtCurrentProcess(), addr, code, MIN_HOOK_BYTES, &written)) && written == MIN_HOOK_BYTES;
+#else
+	// x86: use E9 relative jump (5 bytes)
+	// E9 <rel32> - jmp rel32
+	BYTE code[7] = { 0xB9, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xE1 };
+	*(int32_t*)&code[1] = (int32_t)target;
+	SIZE_T written = 0;
+	return NT_SUCCESS(NtWriteVirtualMemory(NtCurrentProcess(), addr, code, MIN_HOOK_BYTES, &written)) && written == MIN_HOOK_BYTES;
+#endif
 }
 
 bool ApplyLocalHook(
@@ -1220,18 +1359,27 @@ bool ApplyLocalHook(
 ) {
 	if (!hookAddr || !hookHandler || !outTrampoline || !outOriLen) return false;
 
-	// get original asm code length by iterating from hook address, loop break when len>=6
+	// get original asm code length by iterating from hook address, loop break when len>=MIN_HOOK_BYTES
 	uint8_t buf[0x30] = { 0 };
 	SIZE_T bytesRead = 0;
 	if (NtReadVirtualMemory(NtCurrentProcess(), hookAddr, buf, sizeof(buf), &bytesRead) < 0 || bytesRead < MIN_HOOK_BYTES)
 		return false;
 
 	csh handle;
+#ifdef _WIN64
 	if (cs_open(CS_ARCH_X86, CS_MODE_64, &handle) != CS_ERR_OK) return false;
+#else
+	if (cs_open(CS_ARCH_X86, CS_MODE_32, &handle) != CS_ERR_OK) return false;
+#endif
 	cs_option(handle, CS_OPT_DETAIL, CS_OPT_ON);
 
 	cs_insn* ins = cs_malloc(handle);
+#ifdef _WIN64
 	uint64_t rip = (uint64_t)hookAddr;
+#else
+	uint64_t eip = (uint64_t)hookAddr;
+#define rip eip
+#endif
 	size_t remaining = bytesRead;
 	const uint8_t *code_ptr = buf;
 	size_t totalLen = 0;
@@ -1241,6 +1389,9 @@ bool ApplyLocalHook(
 	}
 	cs_free(ins, 1);
 	cs_close(&handle);
+#ifndef _WIN64
+#undef rip
+#endif
 
 	if (totalLen < MIN_HOOK_BYTES) return false;
 	*outOriLen = (DWORD)totalLen;
@@ -1268,6 +1419,9 @@ bool ApplyLocalHook(
 	BYTE* p = (BYTE*)trampoline;
 	PVOID backAddr = (PVOID)((uintptr_t)hookAddr + totalLen);
 
+#ifdef _WIN64
+	// x64 trampoline
+	// Part 1: Save registers and flags
 	// pushfq
 	*p++ = 0x9C;
 
@@ -1279,10 +1433,17 @@ bool ApplyLocalHook(
 	*p++ = 0x41; *p++ = 0x52; // push r10
 	*p++ = 0x41; *p++ = 0x53; // push r11
 
+	// Part 2: Align stack
+	// mov rbx, rsp          ; save original rsp
+	*p++ = 0x48; *p++ = 0x89; *p++ = 0xE3;
+	// and rsp, 0xFFFFFFFFFFFFFFF0  ; align to 16 bytes
+	*p++ = 0x48; *p++ = 0x83; *p++ = 0xE4; *p++ = 0xF0;
+	// sub rsp, 0x50         ; allocate stack space
+	*p++ = 0x48; *p++ = 0x83; *p++ = 0xEC; *p++ = 0x50;
+	// mov [rsp+0x20], rbx   ; save original rsp on stack
+	*p++ = 0x48; *p++ = 0x89; *p++ = 0x5C; *p++ = 0x24; *p++ = 0x20;
 
-	*p++ = 0x48; *p++ = 0x83; *p++ = 0xEC; *p++ = 0x28;
-
-
+	// Part 3: Call handler
 	*p++ = 0x48; *p++ = 0xB8;
 	*(uint64_t*)p = (uint64_t)hookHandler;
 	p += 8;
@@ -1290,9 +1451,13 @@ bool ApplyLocalHook(
 	// call rax (2 bytes: FF D0)
 	*p++ = 0xFF; *p++ = 0xD0;
 
+	// Part 4: Restore stack
+	// add rsp, 0x50
+	*p++ = 0x48; *p++ = 0x83; *p++ = 0xC4; *p++ = 0x50;
+	// mov rsp, rbx
+	*p++ = 0x48; *p++ = 0x89; *p++ = 0xDC;
 
-	*p++ = 0x48; *p++ = 0x83; *p++ = 0xC4; *p++ = 0x28;
-
+	// Part 5: Restore registers and flags
 	// pop r11 r10 r9 r8 rdx rcx rax
 	*p++ = 0x41; *p++ = 0x5B; // pop r11
 	*p++ = 0x41; *p++ = 0x5A; // pop r10
@@ -1314,7 +1479,62 @@ bool ApplyLocalHook(
 	// jmp rcx (FF E1)
 	*p++ = 0xFF; *p++ = 0xE1;
 
+#else
+	// x86 trampoline
+	// Part 1: Save registers and flags
+	// pushfd
+	*p++ = 0x9C;
+	// push eax, ebx, ecx, edx, esi, edi, ebp
+	*p++ = 0x50; // push eax
+	*p++ = 0x53; // push ebx
+	*p++ = 0x51; // push ecx
+	*p++ = 0x52; // push edx
+	*p++ = 0x56; // push esi
+	*p++ = 0x57; // push edi
+	*p++ = 0x55; // push ebp
 
+	// Part 2: Align stack and setup
+	// mov ebx, esp        ; save original esp
+	*p++ = 0x89; *p++ = 0xE3;
+	// and esp, 0xFFFFFFF0  ; align to 16 bytes
+	*p++ = 0x83; *p++ = 0xE4; *p++ = 0xF0;
+	// sub esp, 0x200       ; allocate stack space
+	*p++ = 0x81; *p++ = 0xEC; *p++ = 0x00; *p++ = 0x02; *p++ = 0x00; *p++ = 0x00;
+
+	// Part 3: Call handler
+	// mov ecx, ebp (pass ebp as first parameter)
+	*p++ = 0x89; *p++ = 0xE9;
+	// mov eax, hookHandler; call eax
+	*p++ = 0xB8; // mov eax, imm32
+	*(uint32_t*)p = (uint32_t)(uintptr_t)hookHandler;
+	p += 4;
+	*p++ = 0xFF; *p++ = 0xD0; // call eax
+
+	// Part 4: Restore stack
+	// mov esp, ebx        ; restore original esp
+	*p++ = 0x89; *p++ = 0xDC;
+
+	// Part 5: Restore registers and flags
+	*p++ = 0x5D; // pop ebp
+	*p++ = 0x5F; // pop edi
+	*p++ = 0x5E; // pop esi
+	*p++ = 0x5A; // pop edx
+	*p++ = 0x59; // pop ecx
+	*p++ = 0x5B; // pop ebx
+	*p++ = 0x58; // pop eax
+	// popfd
+	*p++ = 0x9D;
+
+	// original bytes
+	memcpy(p, oriBytes, totalLen);
+	p += totalLen;
+
+	// jmp backAddr (E9 relative jump)
+	*p++ = 0xE9;
+	int32_t jmpOffset = (int32_t)((uintptr_t)backAddr - (uintptr_t)(p + 4));
+	*(int32_t*)p = jmpOffset;
+	p += 4;
+#endif
 
 	*outTrampoline = trampoline;
 	return true;
@@ -1756,7 +1976,12 @@ static bool LoadTrampolineDll(PFN_LdrLoadDll pLdrLoadDll) {
 				if (NtPathToDosPath(processPath, dosPath, MAX_PATH)) {
 					// Append trampoline DLL name
 					WCHAR trampDllPath[MAX_PATH];
+#ifdef  _WIN64
 					swprintf_s(trampDllPath, L"%s%s", dosPath, TRAMP_X64_DLL);
+#else
+					swprintf_s(trampDllPath, L"%s%s", dosPath, TRAMP_X86_DLL);
+#endif   
+
 
 					// Load trampoline.dll
 					UNICODE_STRING trampPathUs;
@@ -1874,13 +2099,18 @@ static BOOL ScanDelayHookFiles(const WCHAR* ntPath, size_t byteLen) {
 }
 
 void __fastcall LdrLoadDll_HookHandler(PVOID rcx, PVOID rdx, PVOID r8, PVOID r9, PVOID rsp) {
-	// DbgBreakPoint();
-	// rcx = PUNICODE_STRING DllName (LdrLoadDll 第一个参数 DllName)
+	// x64: get PUNICODE_STRING DllName from rdi register (LdrLoadDll puts it there before return)
+	// x86: get from first stack parameter
 	PUNICODE_STRING fullDllName = NULL;
+#ifdef _WIN64
 #ifdef _DEBUG
 	fullDllName = (PUNICODE_STRING)*(DWORD64*)pGetRdi();
 #else
 	fullDllName = (PUNICODE_STRING)pGetRdi();
+#endif
+#else
+	// x86: use GetFirstArg to get the first parameter from stack
+	fullDllName = (PUNICODE_STRING)*(DWORD64*)((DWORD64)rcx + 0x10);
 #endif
 	if (!fullDllName || !fullDllName->Buffer || fullDllName->Length == 0) return;
 
