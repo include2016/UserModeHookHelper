@@ -1038,13 +1038,11 @@ OnProcessAttach(
 		// x86: hook before ret, get unicode string from first stack parameter
 		// We use capstone to locate ret instruction and search back to get enough space to write trampoline code
 		do {
-			DbgBreakPoint();
 			// first check if dealy_hook.hash exist, we can reuse CheckSignalFile, only change format
 		if (CheckSignalFile((UCHAR*)ntPath, len, DELAY_HOOK_SIGNAL_FILE_FMT, TRUE)) {
 #ifdef _WIN64
 			// x64: write place holder function to GetRdi code: mov rax, rdi; ret
 			{
-				// DbgBreakPoint();
 				PVOID function_addr = &GetRdi;
 #ifdef _DEBUG
 				function_addr = (PVOID)(DWORD64)(*(DWORD*)((DWORD64)function_addr + 1) + (DWORD64)function_addr + 5);

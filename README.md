@@ -19,6 +19,12 @@ shutdown /g /t 1 /f
 
 # 更新
 
+## 2026-05-20
+
+增加instant hook功能，允许在目标dll尚未加载的时候应用hookseq文件，在目标dll加载完成后自动进行hook
+
+
+
 ## 2025-12-26
 
 增加hooksequence文件支持，可批量hook
