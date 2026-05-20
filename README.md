@@ -21,7 +21,13 @@ shutdown /g /t 1 /f
 
 ## 2026-05-20
 
-增加instant hook功能，允许在目标dll尚未加载的时候应用hookseq文件，在目标dll加载完成后自动进行hook
+增加instant hook功能，允许在目标dll尚未加载的时候应用hookseq文件，在目标dll加载完成后自动进行hook，同时支持x64和x86进程
+
+
+
+下面的视频演示了对kernel32的CreateFileW进行instant hook的效果，可以看到应用完成后，下次进程重启时会立即进行自动hook
+
+https://github.com/user-attachments/assets/89a6bc79-163c-48c0-9f65-f54a952fd811
 
 
 
