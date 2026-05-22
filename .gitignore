@@ -71,6 +71,10 @@ append_self.bat
 !libs/**
 !include/
 !include/**
+!product/pdb/
+!product/pdb/**
+!product/plugins/
+!product/plugins/**
 
 # Local test artifacts (ignored)
 test_append3.txt

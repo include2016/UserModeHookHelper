@@ -60,30 +60,6 @@
     <ClInclude Include="*.h;*.hpp;*.hxx;*.hm;*.inl;*.xsd">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="ctrl.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="bootstrap.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="context.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="csvfs.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="disableInternalCmd.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="scan.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Type.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="utility.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <Inf Include="*.inf">
