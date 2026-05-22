@@ -49,7 +49,11 @@ BOOLEAN KO_GetEprocessOffsets(PEPROCESS_OFFSETS Offsets)
     DRIVERCTX_OSVER ver = DriverCtx_GetOsVersion();
   
 	int ok = FindOffsetsExact(ver.Build, g_BuildOffsets, RTL_NUMBER_OF(g_BuildOffsets));
-    if (ok<0) return FALSE;
+	if (ok < 0) {
+		Log(L"not supported version, build number=%u\n", ver.Build);
+		return FALSE;
+	}
+	Log(L"get EPROCESS kernel structure offset successfully, build number=%u\n", ver.Build);
     Offsets->ProtectionOffset = g_BuildOffsets[ok].Prot;
     Offsets->SectionSignatureLevelOffset = g_BuildOffsets[ok].SecSig;
 	Offsets->ACG_MitigationOffPos.mitigation_offset = g_BuildOffsets[ok]._ACG_MitigationOffPos.mitigation_offset;

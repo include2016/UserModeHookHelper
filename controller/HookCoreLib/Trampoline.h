@@ -73,9 +73,19 @@ namespace HookCore {
 	bool RemoveHookInternal(IHookServices* services, HANDLE hProc, PVOID hook_addr, PVOID trampoline_dll_base,
 		DWORD64 stage_2_func_offset, DWORD original_asm_code_len);
 	bool ConstructTrampoline_x86(IHookServices* services, HANDLE hProcess, PVOID hook_addr, PVOID target_base,
-		PVOID tramp_dll_base, DWORD stage_1_func_offset, DWORD stage_2_func_offset, DWORD64 hook_code_addr, DWORD* out_original_asm_len);
+		PVOID tramp_dll_base, DWORD stage_1_func_offset, DWORD stage_2_func_offset, DWORD64 hook_code_addr, int hook_id, int hook_mode, DWORD* out_original_asm_len);
 	bool ConstructTrampoline_x64(IHookServices* services, HANDLE hProcess, PVOID hook_addr, PVOID target_base,
-		PVOID tramp_dll_base, DWORD stage_1_func_offset, DWORD stage_2_func_offset, DWORD64 hook_code_addr, DWORD* out_original_asm_len);
+		PVOID tramp_dll_base, DWORD stage_1_func_offset, DWORD stage_2_func_offset, DWORD64 hook_code_addr, int hook_id, int hook_mode, DWORD* out_original_asm_len);
 	bool ConstructKernelTrampolineX64(IHookServices* services, PVOID hook_addr, PVOID target_base,
 		PVOID tramp_dll_base, DWORD stage_1_func_offset, DWORD stage_2_func_offset, DWORD64 hook_code_addr, DWORD* out_original_asm_len);
+
+
+
+	// Lua mode: extra instruction sizes in stage_2 shellcode
+	#define HOOKID_INSN_SIZE_X64  10   // mov rdx, imm64
+	#define HOOKID_INSN_SIZE_X86  5   // push imm32
+
+	// Lua mode: total stage_2 shellcode sizes
+	#define stage_2_shellcode_size_lua     (stage_2_shellcode_size + HOOKID_INSN_SIZE_X64)
+	#define x86_stage_2_shellcode_size_lua (x86_stage_2_shellcode_size + HOOKID_INSN_SIZE_X86)
 }

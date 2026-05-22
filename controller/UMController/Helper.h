@@ -29,6 +29,9 @@ public:
 	// Check the dedicated OB callback driver/service (UMHH.ObCallback).
 	// Returns true if the service is running (or was started successfully).
 	static bool UMHH_ObCallback_DriverCheck();
+	// Check whether the specified service is currently running.
+	// Returns true if the service is in SERVICE_RUNNING state.
+	static bool IsServiceRunning(const wchar_t* serviceName);
 	// Resolve a DOS/Win32 path (e.g., C:\...) to an NT-style path. Returns
 	// true on success and stores a string like "\\Device\\HarddiskVolumeX\\..."
 	// If resolution fails, returns false.

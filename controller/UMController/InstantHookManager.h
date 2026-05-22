@@ -2,6 +2,7 @@
 #include <windows.h>
 #include <string>
 #include <vector>
+#include <unordered_map>
 #include "../../Shared/HookServices.h"
 
 class InstantHookManager {
@@ -11,10 +12,13 @@ public:
         std::wstring processNtPath;
         unsigned long long processFnvHash;
         unsigned long long dllFnvHash;
+        unsigned long long offset;           // target offset for hooking
         std::wstring dllPath;             // hook code dll path
         std::wstring exportName;          // the export function of hook code dll
+        std::wstring script;              // Lua mode: script file path
+        std::wstring handler;             // Lua mode: handler function name
         std::wstring module;              // target module (the dll that will be monitored)
-        std::wstring offset;              // offset of target address for target dll base
+        std::wstring offsetStr;           // offset string (e.g. "0x220b0")
         std::wstring hookSeqPath;         // path to .hookseq file (for persistence)
     };
 
@@ -45,6 +49,19 @@ public:
     static bool ParseHookSeqFile(const wchar_t* filePath, std::vector<HookTarget>& outTargets);
 
 private:
+    // Per-PID hook ID allocator: each PID gets its own 256-bit bitfield
+    struct PerPidHookIdPool {
+        DWORD64 bitfield[4] = { 0 };  // 256 bits → hook IDs 0..255
+    };
+
+    std::unordered_map<DWORD, PerPidHookIdPool> m_PidHookIdPools;
+    LONG m_HookIdLock = 0;
+
+    int  AllocHookId(DWORD pid);
+    void ReleaseHookId(DWORD pid, int hookId);
+    void ReleaseAllHookIdsForPid(DWORD pid);
+    void CleanupDeadPidPools();
+
     struct ListenerContext {
         InstantHookManager* mgr;
         HookTarget target;

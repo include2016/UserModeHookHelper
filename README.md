@@ -7,6 +7,7 @@
 - [injdrv](https://github.com/wbenny/injdrv)
 - [capstone](https://github.com/capstone-engine/capstone)
 - [ProcessHacker](https://sourceforge.net/projects/processhacker/)
+- [Lua](https://www.lua.org/about.html)
 
 **驱动使用的是测试签名，需要开启测试模式，不然无法加载**
 
@@ -18,6 +19,62 @@ shutdown /g /t 1 /f
 **本工具使用inline hook，因此hook点位至少需要有6字节才能进行hook**
 
 # 更新
+
+## 2026-05-22
+
+增加Lua hook模式，通过lua脚本来编写hook逻辑，并且支持热更新
+
+下面的视频演示了lua hook模式以及热更新功能
+
+https://github.com/user-attachments/assets/8934fb78-3c1a-46f7-8853-f09f33533084
+
+hookseq example：
+
+```
+[hook]
+module=kernel32.dll
+offset=0x57160
+script=C:\Users\x\Desktop\project\umhh\controller\UMController\createfilewhook.lua
+handler=on_hook
+```
+
+hook.lua example:
+
+```lua
+function on_hook(regs)
+      log("file open, Path=" .. mem.read_wstring(regs.rcx))
+end
+```
+
+
+
+x86版本的lua脚本示例：
+
+```lua
+function on_hook(regs)
+    log("file open, Path=" .. mem.read_wstring(mem.read_u32(regs.esp+4)))
+end
+```
+
+
+
+
+
+[目前已实现的binding](https://github.com/wqreytuk/UserModeHookHelper/blob/41f7da0cf85870779f9222016351b9706aef925b/hook_component/LuaEngine/dllmain.cpp#L259)
+
+
+
+## 2026-05-20
+
+增加instant hook功能，允许在目标dll尚未加载的时候应用hookseq文件，在目标dll加载完成后自动进行hook，同时支持x64和x86进程
+
+
+
+下面的视频演示了对kernel32的CreateFileW进行instant hook的效果，可以看到应用完成后，下次进程重启时会立即进行自动hook
+
+https://github.com/user-attachments/assets/89a6bc79-163c-48c0-9f65-f54a952fd811
+
+
 
 ## 2025-12-26
 

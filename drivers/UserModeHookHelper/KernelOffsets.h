@@ -3,6 +3,7 @@
 
 #include "Common.h"
 #include "DriverCtx.h"
+#include "Trace.h"
 
 typedef struct _EPROCESS_OFFSETS {
 	ULONG ProtectionOffset;

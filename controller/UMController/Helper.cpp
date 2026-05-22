@@ -191,6 +191,32 @@ bool Helper::GetFullImageNtPathFromHandle(HANDLE hProcess, std::wstring& outNtPa
 	return true;
 }
 
+bool Helper::IsServiceRunning(const wchar_t* serviceName) {
+	SC_HANDLE scm = OpenSCManagerW(NULL, NULL, SC_MANAGER_CONNECT);
+	if (!scm) {
+		LOG_CTRL_ETW(L"IsServiceRunning: OpenSCManagerW failed: %lu\n", GetLastError());
+		return false;
+	}
+	SC_HANDLE svc = OpenServiceW(scm, serviceName, SERVICE_QUERY_STATUS);
+	if (!svc) {
+		LOG_CTRL_ETW(L"IsServiceRunning: OpenServiceW failed for '%s': %lu\n", serviceName, GetLastError());
+		CloseServiceHandle(scm);
+		return false;
+	}
+	SERVICE_STATUS_PROCESS ssp = { 0 };
+	DWORD bytes = 0;
+	bool running = false;
+	if (QueryServiceStatusEx(svc, SC_STATUS_PROCESS_INFO, (LPBYTE)&ssp, sizeof(ssp), &bytes)) {
+		running = (ssp.dwCurrentState == SERVICE_RUNNING);
+	}
+	else {
+		LOG_CTRL_ETW(L"IsServiceRunning: QueryServiceStatusEx failed: %lu\n", GetLastError());
+	}
+	CloseServiceHandle(svc);
+	CloseServiceHandle(scm);
+	return running;
+}
+
 bool Helper::UMHH_ObCallback_DriverCheck() {
 	const wchar_t* svcName = UMHH_OB_CALLBACK_SERVICE_NAME;
 
