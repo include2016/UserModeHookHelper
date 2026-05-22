@@ -74,7 +74,7 @@ namespace HookCore {
 	// Returns true on success, false otherwise. Real hook logic (trampoline/IAT/etc.) will
 	// replace this in future iterations.
 	bool ApplyHook(DWORD pid, ULONGLONG address, IHookServices* services,
-		DWORD64 hook_code_addr, int hook_id, DWORD *out_ori_asm_code_len,
+		DWORD64 hook_code_addr, int hook_id, int hook_mode, DWORD *out_ori_asm_code_len,
 		PVOID* out_trampoline_pit, PVOID* out_ori_asm_code_addr) {
 		PVOID trampoline_dll_base = 0;
 		std::wstring trampFullPath;
@@ -91,7 +91,7 @@ namespace HookCore {
 			LOG_CORE(services, L"failed to call IsProcess64 target Pid=%u\n", pid);
 			return false;
 		}
-
+ 
 		// try open process with suitable access
 		// we should request dirver to get a high access process handle
 		if (!services->GetHighAccessProcHandle(pid, &hProc)) {
@@ -250,7 +250,7 @@ namespace HookCore {
 		*out_ori_asm_code_addr = (PVOID)(stage_2_func_offset + (DWORD64)trampoline_dll_base + OFFSET_FOR_ORIGINAL_ASM_CODE_SAVE);
 		if (is64) {
 			if (!ConstructTrampoline_x64(services, hProc, (PVOID)address, module_base, trampoline_dll_base,
-				stage_1_func_offset, stage_2_func_offset, hook_code_addr, &original_asm_code_len)) {
+				stage_1_func_offset, stage_2_func_offset, hook_code_addr, hook_id, hook_mode, &original_asm_code_len)) {
 				if (services)
 					LOG_CORE(services, L"ConstructTrampoline_x64 failed\n");
 				return false;
@@ -258,7 +258,7 @@ namespace HookCore {
 		}
 		else {
 			if (!ConstructTrampoline_x86(services, hProc, (PVOID)address, module_base, trampoline_dll_base,
-				stage_1_func_offset, stage_2_func_offset, hook_code_addr, &original_asm_code_len)) {
+				stage_1_func_offset, stage_2_func_offset, hook_code_addr, hook_id, hook_mode, &original_asm_code_len)) {
 				if (services)
 					LOG_CORE(services, L"ConstructTrampoline_x64 failed\n");
 				return false;

@@ -429,38 +429,38 @@ public:
 	}
 	bool InjectTrampoline(DWORD targetPid, const wchar_t* fullDllPath) override {
 		DWORD timeoutMs = TRAMPOLINE_INJECTION_TIMEOUT;
-		// Step 1: 参数验证
+	
 		if (targetPid == 0 || !fullDllPath || *fullDllPath == L'\0') {
 			LOG_CTRL_ETW(L"InjectTrampoline: invalid args pid=%u\n", targetPid);
 			return false;
 		}
 
-		// Step 2: 提取DLL文件名用于构造事件名
+	
 		std::wstring dllPath(fullDllPath);
 		size_t pos = dllPath.find_last_of(L"\\/");
 		std::wstring dllName = (pos != std::wstring::npos) ? dllPath.substr(pos + 1) : dllPath;
 
-		// Step 3: 构造要等待的事件名（在发送IPC前创建）
+	
 		WCHAR eventName[MAX_PATH];
 		swprintf_s(eventName, RTL_NUMBER_OF(eventName) - 1,
 			HOOK_DLL_UM_INJECTED_DLL_LOADED_EVENT L"%u_%s",
 			targetPid, dllName.c_str());
 
-		// Step 4: 创建自动重置事件（初始无信号）
+	
 		HANDLE hWaitEvent = CreateEventW(NULL, FALSE, FALSE, eventName);
 		if (!hWaitEvent) {
 			LOG_CTRL_ETW(L"InjectTrampoline: failed to create wait event (err=%lu)\n", GetLastError());
 			return false;
 		}
 
-		// Step 5: 发送IPC注入信号
+	
 		if (!IPC_SendInject(targetPid, fullDllPath)) {
 			LOG_CTRL_ETW(L"InjectTrampoline: IPC_SendInject failed (err=%lu)\n", GetLastError());
 			CloseHandle(hWaitEvent);
 			return false;
 		}
 
-		// Step 6: 如果需要等待，则阻塞直到超时或收到通知
+		
 		if (timeoutMs > 0) {
 			LOG_CTRL_ETW(L"InjectTrampoline: waiting for injection confirmation...\n");
 
@@ -474,20 +474,18 @@ public:
 			else if (waitResult == WAIT_TIMEOUT) {
 				LOG_CTRL_ETW(L"InjectTrampoline: timeout (%lu ms) pid=%u - falling back to polling\n",
 					timeoutMs, targetPid);
-				// 超时后降级为传统轮询模式
 			}
 			else {
 				LOG_CTRL_ETW(L"InjectTrampoline: wait failed (err=%lu), falling back to polling\n", GetLastError());
 			}
 		}
 		else {
-			// 不需要等待
 			CloseHandle(hWaitEvent);
 			LOG_CTRL_ETW(L"InjectTrampoline: signal sent (no wait) pid=%u\n", targetPid);
 			return true;
 		}
 
-		// Step 7: 降级为传统轮询模式（保持向后兼容）
+
 		LOG_CTRL_ETW(L"InjectTrampoline: using fallback polling for pid=%u\n", targetPid);
 
 		std::wstring trampName = dllName;
@@ -764,6 +762,11 @@ BOOL CUMControllerDlg::OnInitDialog()
 		Helper::Fatal(L"UMHH_BS_DriverCheck failed\n");
 	}
 	Helper::UMHH_DriverCheck();
+	if (!Helper::IsServiceRunning(SERVICE_NAME)) {
+		LOG_CTRL_ETW(L"UMHH service '%s' is not running\n", SERVICE_NAME);
+		app.GetETW().UnReg();
+		exit(-1);
+	}
 	// resolve NtCreateThreadEx syscal number
 	if (!Helper::ResolveNtCreateThreadExSyscallNum(&m_NtCreateThreadExSyscallNum)) {
 		Helper::Fatal(L"ResolveNtCreateThreadExSyscallNum failed\n");

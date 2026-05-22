@@ -7,6 +7,7 @@
 - [injdrv](https://github.com/wbenny/injdrv)
 - [capstone](https://github.com/capstone-engine/capstone)
 - [ProcessHacker](https://sourceforge.net/projects/processhacker/)
+- [Lua](https://www.lua.org/about.html)
 
 **驱动使用的是测试签名，需要开启测试模式，不然无法加载**
 
@@ -18,6 +19,12 @@ shutdown /g /t 1 /f
 **本工具使用inline hook，因此hook点位至少需要有6字节才能进行hook**
 
 # 更新
+
+## 2026-05-22
+
+增加Lua hook模式，通过lua脚本来编写hook逻辑，并且支持热更新
+
+
 
 ## 2026-05-20
 

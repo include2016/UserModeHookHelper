@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #ifndef MASTER_LOAD_EVENT_BASE 
 #define MASTER_LOAD_EVENT_BASE L"MASTER_LOAD_EVENT."
 #endif
@@ -9,6 +9,13 @@
 #define DLL_LOAD_MON_DLL_NAME L"DllLoadMon.dll"
 #define DLL_LOAD_MON_EXPORT_X64 "DllLoadMonHook_X64"
 #define DLL_LOAD_MON_EXPORT_Win32 "DllLoadMonHook_Win32"
+
+#define LUA_ENGINE_DLL_X64 L"LuaEngine.x64.dll"
+#define LUA_ENGINE_DLL_Win32 L"LuaEngine.Win32.dll"
+
+
+#define LUA_ENGINE_EXPORT_X64 "LuaHookDispatch_X64"
+#define LUA_ENGINE_EXPORT_Win32 "LuaHookDispatch_Win32"
 
 #define DLL_LOAD_MON_HOOK_ID 255
 
@@ -34,7 +41,27 @@
 #ifndef HOOK_DLL_UM_WAKEUP_EVENT
 #define HOOK_DLL_UM_WAKEUP_EVENT L"Global\\" WAKEUP_EVENT_BASE
 #endif
+// Hook mode constants
+#define HOOK_MODE_DLL  0   // hook_code_addr points to DLL export function
+#define HOOK_MODE_LUA  1   // hook_code_addr points to LuaEngine dispatch
 
+#define LUA_ENGINE_SIGNAL_EVENT_BASE    L"LUA_ENGINE_SIGNAL.%u_%d"
+#define LUA_ENGINE_NT_SIGNAL_EVENT      L"\\BaseNamedObjects\\" LUA_ENGINE_SIGNAL_EVENT_BASE
+#define LUA_ENGINE_UM_SIGNAL_EVENT      L"Global\\" LUA_ENGINE_SIGNAL_EVENT_BASE
+
+
+// LuaEngine → Controller: signal back that script was loaded
+#define LUA_ENGINE_LOADED_EVENT_BASE    L"LUA_ENGINE_LOADED.%u_%d"
+#define LUA_ENGINE_NT_LOADED_EVENT      L"\\BaseNamedObjects\\" LUA_ENGINE_LOADED_EVENT_BASE
+#define LUA_ENGINE_UM_LOADED_EVENT      L"Global\\" LUA_ENGINE_LOADED_EVENT_BASE
+
+
+// IPC data file
+#define LUA_ENGINE_IPC_FILE_FMT         L"C:\\Users\\Public\\lua_ipc.%d"
+#define LUA_ENGINE_NT_IPC_FILE_FMT      L"\\??\\" LUA_ENGINE_IPC_FILE_FMT
+
+// Separator in IPC data between script path and handler name
+#define LUA_IPC_SEPARATOR L'|'
 
 #ifndef HOOK_DLL_LOAD_MUTANT_FMT
 #define HOOK_DLL_LOAD_MUTANT_FMT L"\\BaseNamedObjects\\UMHH_DLL_MUTANT.%d"
@@ -111,6 +138,7 @@ typedef struct _PH_MODULE_LIST_NODE {
 // Protected process names (final component, REG_MULTI_SZ)
 #define REG_PROTECTED_PROCESS_NAME L"ProtectedProcessName"
 
+#define LUA_ENGINE_PLACEHOLDER_EXP_FUNC "LuaEngineIPCSlot"
 
 #define TRAMPOLINE_EXP_NUM_MAX 0x100
 

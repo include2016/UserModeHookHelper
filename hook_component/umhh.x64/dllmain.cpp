@@ -435,8 +435,8 @@ typedef NTSTATUS(NTAPI *PFN_LdrLoadDll)(
 	PHANDLE             ModuleHandle         // out: handle to loaded module
 	);
 
-// Load trampoline.dll from UMController's directory
-static bool LoadTrampolineDll(PFN_LdrLoadDll pLdrLoadDll);
+// Load a DLL from UMController's directory
+static bool LoadDllFromControllerDir(PFN_LdrLoadDll pLdrLoadDll, const WCHAR* dllName);
 // Minimal typedefs in case winternl.h not present
 typedef NTSTATUS(NTAPI *PFN_NtOpenFile)(
 	PHANDLE            FileHandle,
@@ -1100,8 +1100,18 @@ OnProcessAttach(
 			if (g_InstantHookList == nullptr)
 				break;
 
-			// Load trampoline.dll from UMController's directory
-			LoadTrampolineDll(pLdrLoadDll);
+			// Load trampoline.dll
+#ifdef _WIN64
+			LoadDllFromControllerDir(pLdrLoadDll, TRAMP_X64_DLL);
+#else
+			LoadDllFromControllerDir(pLdrLoadDll, TRAMP_X86_DLL);
+#endif
+			// load luaengine.dll
+#ifdef _WIN64
+			LoadDllFromControllerDir(pLdrLoadDll, LUA_ENGINE_DLL_X64);
+#else
+			LoadDllFromControllerDir(pLdrLoadDll, LUA_ENGINE_DLL_Win32);
+#endif
 
 			// Load all hook code DLLs
 			InstantHookTarget* pNode = g_InstantHookList;
@@ -1911,7 +1921,7 @@ static bool NtPathToDosPath(const WCHAR* ntPath, WCHAR* dosPath, SIZE_T dosPathS
 	return found;
 }
 
-static bool LoadTrampolineDll(PFN_LdrLoadDll pLdrLoadDll) {
+static bool LoadDllFromControllerDir(PFN_LdrLoadDll pLdrLoadDll, const WCHAR* dllName) {
 	// Read UMController PID from file
 	ULONG umcontrollerPid = 0;
 	FILE* f = NULL;
@@ -1972,16 +1982,12 @@ static bool LoadTrampolineDll(PFN_LdrLoadDll pLdrLoadDll) {
 				RtlZeroMemory(dosPath, sizeof(dosPath));
 
 				if (NtPathToDosPath(processPath, dosPath, MAX_PATH)) {
-					// Append trampoline DLL name
+					// Append DLL name
 					WCHAR trampDllPath[MAX_PATH];
-#ifdef  _WIN64
-					swprintf_s(trampDllPath, L"%s%s", dosPath, TRAMP_X64_DLL);
-#else
-					swprintf_s(trampDllPath, L"%s%s", dosPath, TRAMP_X86_DLL);
-#endif   
+					swprintf_s(trampDllPath, L"%s%s", dosPath, dllName);
 
 
-					// Load trampoline.dll
+					// Load the DLL
 					UNICODE_STRING trampPathUs;
 					RtlInitUnicodeString(&trampPathUs, trampDllPath);
 					HANDLE hTramp = NULL;

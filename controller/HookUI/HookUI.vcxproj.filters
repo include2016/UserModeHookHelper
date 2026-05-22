@@ -7,7 +7,6 @@
     <ClCompile Include="HookUIFactory.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="DllLoadMonManager.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="HookInterfaces.h">
@@ -23,7 +22,6 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="resource.h" />
-    <ClInclude Include="DllLoadMonManager.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="README.md" />

@@ -184,6 +184,83 @@ std::vector<unsigned long long> InstantHookManager::GetActiveProcessHashes() con
 	return hashes;
 }
 
+
+// Helper: signal LuaEngine to load a script via IPC
+// 1. Find LuaEngineIPCSlot export address in target process
+// 2. Write script_path|handler_name data there
+// 3. Signal the LUA_ENGINE_SIGNAL event
+static bool SignalLuaEngineScript(IHookServices* services, DWORD pid, int hookId,
+    const std::wstring& scriptPath, const std::wstring& handlerName, DWORD64 luaEngineBase, bool is64)
+{
+    // Build arch-specific LuaEngine path for export resolution
+    WCHAR luaEngineName[MAX_PATH] = { 0 };
+    wcscpy_s(luaEngineName, is64 ? LUA_ENGINE_DLL_X64 : LUA_ENGINE_DLL_Win32);
+    std::wstring luaEngineFullPath = services->GetCurrentDirFilePath(luaEngineName);
+
+    // Get LuaEngineIPCSlot export offset
+    DWORD ipcSlotOffset = 0;
+    if (!services->CheckExportFromFile(luaEngineFullPath.c_str(), LUA_ENGINE_PLACEHOLDER_EXP_FUNC, &ipcSlotOffset)) {
+        LOG_CTRL_INSHOOK(L"failed to get LuaEngineIPCSlot export offset\n");
+        return false;
+    }
+
+    PVOID ipcSlotAddr = (PVOID)(luaEngineBase + ipcSlotOffset);
+
+#ifdef _DEBUG
+    // In debug builds the export function starts with a jmp instruction;
+    // resolve the real address by reading the jmp operand.
+    HANDLE hProcDbg = NULL;
+    if (services->GetHighAccessProcHandle(pid, &hProcDbg) && hProcDbg) {
+        DWORD oldProtect1 = 0;
+        VirtualProtectEx(hProcDbg, (LPVOID)((DWORD64)ipcSlotAddr + E9_JMP_INSTRUCTION_OPCODE_SIZE), E9_JMP_INSTRUCTION_OPRAND_SIZE, PAGE_EXECUTE_READWRITE, &oldProtect1);
+        DWORD e9Oprand = 0;
+        ReadProcessMemory(hProcDbg, (LPVOID)((DWORD64)ipcSlotAddr + E9_JMP_INSTRUCTION_OPCODE_SIZE), &e9Oprand, E9_JMP_INSTRUCTION_OPRAND_SIZE, NULL);
+        ipcSlotAddr = (PVOID)((DWORD64)ipcSlotAddr + E9_JMP_INSTRUCTION_SIZE + e9Oprand);
+        VirtualProtectEx(hProcDbg, (LPVOID)((DWORD64)luaEngineBase + ipcSlotOffset + E9_JMP_INSTRUCTION_OPCODE_SIZE), E9_JMP_INSTRUCTION_OPRAND_SIZE, oldProtect1, &oldProtect1);
+        CloseHandle(hProcDbg);
+    }
+#endif
+
+    // Build IPC data: script_path|handler_name
+    WCHAR ipcData[MAX_PATH + 256] = { 0 };
+    int pos = 0;
+    for (size_t i = 0; i < scriptPath.size() && pos < MAX_PATH - 1; i++) {
+        ipcData[pos++] = scriptPath[i];
+    }
+    ipcData[pos++] = L'|';
+    for (size_t i = 0; i < handlerName.size() && pos < MAX_PATH + 255; i++) {
+        ipcData[pos++] = handlerName[i];
+    }
+	ipcData[pos] = L'\0';
+    HANDLE hProc = NULL;
+    if (!services->GetHighAccessProcHandle(pid, &hProc) || !hProc) {
+        LOG_CTRL_INSHOOK(L"failed to get high access process handle, pid=%u\n", pid);
+        return false;
+    }
+
+    DWORD oldProtect = 0;
+    if (VirtualProtectEx(hProc, (LPVOID)ipcSlotAddr, (pos + 1) * sizeof(WCHAR), PAGE_EXECUTE_READWRITE, &oldProtect)) {
+        SIZE_T written = 0;
+        services->WriteProcessMemoryWrap(hProc, (LPVOID)ipcSlotAddr, ipcData, (pos + 1) * sizeof(WCHAR), &written);
+        VirtualProtectEx(hProc, (LPVOID)ipcSlotAddr, (pos + 1) * sizeof(WCHAR), oldProtect, &oldProtect);
+    }
+    CloseHandle(hProc);
+
+    // Signal the event: Global\LUA_ENGINE_SIGNAL.<pid>_<hookId>
+    WCHAR eventName[150];
+    swprintf_s(eventName, LUA_ENGINE_UM_SIGNAL_EVENT, pid, hookId);
+    HANDLE hEvent = OpenEventW(EVENT_MODIFY_STATE, FALSE, eventName);
+    if (!hEvent) {
+        LOG_CTRL_INSHOOK(L"failed to open IPC event %s, err=%u\n", eventName, GetLastError());
+        return false;
+    }
+    SetEvent(hEvent);
+    CloseHandle(hEvent);
+
+    LOG_CTRL_INSHOOK(L"IPC signal sent: hookId=%d script=%s handler=%s\n", hookId, scriptPath.c_str(), handlerName.c_str());
+    return true;
+}
+
 void InstantHookManager::ListenerThreadImpl(ListenerContext* ctx) {
 	// construct event names (only once)
 	WCHAR loadEventName[MAX_PATH];
@@ -264,53 +341,113 @@ void InstantHookManager::ListenerThreadImpl(ListenerContext* ctx) {
 			continue;  // Continue to next iteration
 		}
 
-		// hook code dll is already preloaded in umhh.dll ldrloaddll handler code
 
-		// wait for hook dll to load
-		DWORD64 hookDllBase = 0;
-		int retries = 50; // 5 seconds max
+		bool isLuaMode = !ctx->target.script.empty();
+		int hook_mode = isLuaMode ? HOOK_MODE_LUA : HOOK_MODE_DLL;
 
-		// Extract filename from dllPath
-		const wchar_t* dllFileName = wcsrchr(ctx->target.dllPath.c_str(), L'\\');
-		if (dllFileName) {
-			dllFileName++; // Skip the backslash
-		}
-		else {
-			dllFileName = ctx->target.dllPath.c_str(); // Use full path if no backslash
-		}
-
-		while (retries-- > 0) {
-			if (m_services->GetModuleBase(pid, dllFileName, &hookDllBase) && hookDllBase != 0) {
-				break;
-			}
-			Sleep(100);
-		}
-
-		if (hookDllBase == 0) {
-			LOG_CTRL_INSHOOK(L"failed to get hook code dll base\n");
-			SetEvent(ctx->hHookNotify);
-			continue;  // Continue to next iteration
-		}
-
-		// get module base
+		// get module base (common to both modes)
 		DWORD64 moduleBase = 0;
 		if (!m_services->GetModuleBase(pid, ctx->target.module.c_str(), &moduleBase) || moduleBase == 0) {
 			LOG_CTRL_INSHOOK(L"failed to get target module base\n");
 			SetEvent(ctx->hHookNotify);
-			continue;  // Continue to next iteration
+			continue;
 		}
 
 		// use pre-parsed offset
 		DWORD64 offset = ctx->target.offset;
 
-		// verify export
-		DWORD hookCodeOffset = 0;
-		CT2A exportNameA(ctx->target.exportName.c_str());
-		if (!m_services->CheckExportFromFile(ctx->target.dllPath.c_str(), exportNameA, &hookCodeOffset)) {
-			LOG_CTRL_INSHOOK(L"failed to get target export function=%s of target dll%s\n",
-				ctx->target.exportName.c_str(), ctx->target.dllPath.c_str());
-			SetEvent(ctx->hHookNotify);
-			continue;  // Continue to next iteration
+		DWORD64 hookFunctionAddress = 0;
+		DWORD64 luaEngineBase = 0;
+		bool is64 = false;
+		m_services->IsProcess64(pid, is64);
+
+		if (isLuaMode) {
+			// Lua mode: hook using LuaEngine.dll dispatch function
+			// 1. Get LuaEngine.dll base in target process (use arch-specific name)
+			if (m_services->GetModuleBase(pid, is64 ? LUA_ENGINE_DLL_X64 : LUA_ENGINE_DLL_Win32, &luaEngineBase) && luaEngineBase != 0) {
+				LOG_CTRL_INSHOOK(L"LuaEngine.dll already loaded at 0x%llX (pid %u)\n", luaEngineBase, pid);
+			}
+			else {
+				LOG_CTRL_INSHOOK(L"LuaEngine.dll not loaded, requesting injection (pid %u)\n", pid);
+				WCHAR luaEngineName[MAX_PATH] = { 0 };
+				wcscpy_s(luaEngineName, is64 ? LUA_ENGINE_DLL_X64 : LUA_ENGINE_DLL_Win32);
+				std::wstring luaEngineFullPath = m_services->GetCurrentDirFilePath(luaEngineName);
+
+				bool injected = m_services->InjectTrampoline(pid, luaEngineFullPath.c_str());
+				LOG_CTRL_INSHOOK(L"LuaEngine %s inject result: %s\n", is64 ? LUA_ENGINE_DLL_X64 : LUA_ENGINE_DLL_Win32, injected ? L"success" : L"failure");
+				if (injected) {
+					const int maxIter = 50;
+					bool loaded = false;
+					for (int iter = 0; iter < maxIter && !loaded; ++iter) {
+						m_services->GetModuleBase(pid, is64 ? LUA_ENGINE_DLL_X64 : LUA_ENGINE_DLL_Win32, &luaEngineBase);
+						if (luaEngineBase != 0) {
+							loaded = true;
+							break;
+						}
+						Sleep(100);
+					}
+					if (!loaded) {
+						LOG_CTRL_INSHOOK(L"LuaEngine %s NOT detected within 5s after injection (pid %u)\n", is64 ? LUA_ENGINE_DLL_X64 : LUA_ENGINE_DLL_Win32, pid);
+						SetEvent(ctx->hHookNotify);
+						continue;
+					}
+					LOG_CTRL_INSHOOK(L"LuaEngine %s detected at 0x%llX after injection (pid %u)\n", is64 ? LUA_ENGINE_DLL_X64 : LUA_ENGINE_DLL_Win32, luaEngineBase, pid);
+				}
+				else {
+					LOG_CTRL_INSHOOK(L"failed to inject %s (pid %u), aborting\n", is64 ? LUA_ENGINE_DLL_X64 : LUA_ENGINE_DLL_Win32, pid);
+					SetEvent(ctx->hHookNotify);
+					continue;
+				}
+			}
+
+			// 2. Get LuaHookDispatch export offset (use full path for reliable resolution)
+			WCHAR luaEngineName2[MAX_PATH] = { 0 };
+			wcscpy_s(luaEngineName2, is64 ? LUA_ENGINE_DLL_X64 : LUA_ENGINE_DLL_Win32);
+			std::wstring luaEngineFullPath2 = m_services->GetCurrentDirFilePath(luaEngineName2);
+
+			DWORD dispatchOffset = 0;
+			const char* dispatchName = is64 ? LUA_ENGINE_EXPORT_X64 : LUA_ENGINE_EXPORT_Win32;
+			if (!m_services->CheckExportFromFile(luaEngineFullPath2.c_str(), dispatchName, &dispatchOffset)) {
+				LOG_CTRL_INSHOOK(L"failed to get LuaEngine dispatch export: %s\n", is64 ? WIDEN(LUA_ENGINE_EXPORT_X64) : WIDEN(LUA_ENGINE_EXPORT_Win32));
+				SetEvent(ctx->hHookNotify);
+				continue;
+			}
+			hookFunctionAddress = luaEngineBase + dispatchOffset;
+
+		} else {
+			// DLL mode: wait for hook code dll to load and verify export
+			DWORD64 hookDllBase = 0;
+			int retries = 50;
+
+			const wchar_t* dllFileName = wcsrchr(ctx->target.dllPath.c_str(), L'\\');
+			if (dllFileName) {
+				dllFileName++;
+			} else {
+				dllFileName = ctx->target.dllPath.c_str();
+			}
+
+			while (retries-- > 0) {
+				if (m_services->GetModuleBase(pid, dllFileName, &hookDllBase) && hookDllBase != 0) {
+					break;
+				}
+				Sleep(100);
+			}
+
+			if (hookDllBase == 0) {
+				LOG_CTRL_INSHOOK(L"failed to get hook code dll base\n");
+				SetEvent(ctx->hHookNotify);
+				continue;
+			}
+
+			DWORD hookCodeOffset = 0;
+			CT2A exportNameA(ctx->target.exportName.c_str());
+			if (!m_services->CheckExportFromFile(ctx->target.dllPath.c_str(), exportNameA, &hookCodeOffset)) {
+				LOG_CTRL_INSHOOK(L"failed to get target export function=%s of target dll%s\n",
+					ctx->target.exportName.c_str(), ctx->target.dllPath.c_str());
+				SetEvent(ctx->hHookNotify);
+				continue;
+			}
+			hookFunctionAddress = hookDllBase + hookCodeOffset;
 		}
 
 		// allocate hook ID
@@ -343,9 +480,17 @@ void InstantHookManager::ListenerThreadImpl(ListenerContext* ctx) {
 		PVOID trampoline = nullptr;
 		PVOID oriAsmAddr = nullptr;
 		DWORD64 targetAddress = moduleBase + offset;
-		DWORD64 hookFunctionAddress = hookDllBase + hookCodeOffset;
+
+
+		// For Lua mode, signal LuaEngine to load the script before applying hook
+		if (isLuaMode) {
+			if (!SignalLuaEngineScript(m_services, pid, hookId, ctx->target.script, ctx->target.handler, luaEngineBase, is64)) {
+				LOG_CTRL_INSHOOK(L"failed to signal LuaEngine for script load, hookId=%d\n");
+				// Still try to apply hook - the script might already be loaded
+			}
+		}
 		HookCore::SetHookServices(m_services);
-		if (!HookCore::ApplyHook(pid, targetAddress, m_services, hookFunctionAddress, hookId, &oriLen, &trampoline, &oriAsmAddr)) {
+		if (!HookCore::ApplyHook(pid, targetAddress, m_services, hookFunctionAddress, hookId, hook_mode, &oriLen, &trampoline, &oriAsmAddr)) {
 			// release hook ID
 			_bittestandreset((LONG*)&g_HookIdBitfield[hookId / 64], hookId % 64);
 			LOG_CTRL_INSHOOK(L"ApplyHook failed for pid=%u\n", pid);
@@ -411,6 +556,7 @@ bool InstantHookManager::ParseHookSeqFile(const wchar_t* filePath, std::vector<H
 	HookTarget target;
 	bool inHook = false;
 	bool hasModule = false, hasOffset = false, hasDllPath = false, hasExport = false;
+	bool hasScript = false, hasHandler = false;
 
 	while (fgetws(lineBuf, MAX_PATH * 2, f)) {
 		wchar_t* p = lineBuf;
@@ -423,12 +569,14 @@ bool InstantHookManager::ParseHookSeqFile(const wchar_t* filePath, std::vector<H
 		}
 
 		if (p[0] == L'[' && wcsncmp(p + 1, L"hook]", 5) == 0) {
-			if (inHook && hasModule && hasOffset && hasDllPath && hasExport) {
+			bool dllMode = hasModule && hasOffset && hasDllPath && hasExport;
+			bool luaMode = hasModule && hasOffset && hasScript && hasHandler;
+			if (inHook && (dllMode || luaMode)) {
 				outTargets.push_back(target);
 			}
 			memset(&target, 0, sizeof(target));
 			inHook = true;
-			hasModule = hasOffset = hasDllPath = hasExport = false;
+			hasModule = hasOffset = hasDllPath = hasExport = hasScript = hasHandler = false;
 			continue;
 		}
 
@@ -465,10 +613,22 @@ bool InstantHookManager::ParseHookSeqFile(const wchar_t* filePath, std::vector<H
 			target.exportName = val;
 			hasExport = true;
 		}
+		else if (wcscmp(key, L"script") == 0) {
+			target.script = val;
+			hasScript = true;
+		}
+		else if (wcscmp(key, L"handler") == 0) {
+			target.handler = val;
+			hasHandler = true;
+		}
 	}
 
-	if (inHook && hasModule && hasOffset && hasDllPath && hasExport) {
-		outTargets.push_back(target);
+	{
+		bool dllMode = hasModule && hasOffset && hasDllPath && hasExport;
+		bool luaMode = hasModule && hasOffset && hasScript && hasHandler;
+		if (inHook && (dllMode || luaMode)) {
+			outTargets.push_back(target);
+		}
 	}
 
 	fclose(f);

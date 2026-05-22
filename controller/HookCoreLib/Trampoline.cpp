@@ -1,5 +1,6 @@
 ﻿#include "Trampoline.h"
 #include "../Shared/LogMacros.h"
+#include "../Shared/SharedMacroDef.h"
 #include "Disasm.h"
 #include "HookCore.h"
 namespace HookCore {
@@ -111,7 +112,7 @@ namespace HookCore {
 		return true;
 	}
 	bool ConstructTrampoline_x86(IHookServices* services, HANDLE hProcess, PVOID hook_addr, PVOID target_base,
-		PVOID tramp_dll_base, DWORD stage_1_func_offset, DWORD stage_2_func_offset, DWORD64 hook_code_addr, DWORD* out_original_asm_len) {
+		PVOID tramp_dll_base, DWORD stage_1_func_offset, DWORD stage_2_func_offset, DWORD64 hook_code_addr, int hook_id, int hook_mode, DWORD* out_original_asm_len) {
 
 		if (!services) {
 			MessageBoxW(NULL, L"Fatal Error! services is NULL!", L"Hook", MB_OK | MB_ICONINFORMATION);
@@ -327,34 +328,77 @@ ff 25 44 33 22 11       jmp    DWORD PTR ds:0x11223344
 
 
 
-			DWORD64 calladdr = stage_2_addr + x86_stage_2_shellcode_size;
+				if (hook_mode == HOOK_MODE_LUA) {
+					// Lua mode: insert push hook_id (5 bytes) before push ebx
+					UCHAR stage_2_shellcode_lua[x86_stage_2_shellcode_size_lua];
+					// First 0x0B bytes: mov ebx,esp / and esp,0xFFFFFFF0 / sub esp,0x200
+					memcpy(stage_2_shellcode_lua, stage_2_shellcode, 0x0B);
+					// Insert push hook_id: 68 + 4 bytes little-endian hook_id
+					stage_2_shellcode_lua[0x0B] = 0x68;
+					*(DWORD*)(stage_2_shellcode_lua + 0x0C) = hook_id;
+					// Copy remaining: push ebx / call / mov esp,ebx / jmp
+					memcpy(stage_2_shellcode_lua + 0x10, stage_2_shellcode + 0x0B,
+						x86_stage_2_shellcode_size - 0x0B);
 
-			int call_offset = 0xe;
-			*(DWORD*)(stage_2_shellcode + call_offset) = calladdr;// -stage_2_addr;
+					DWORD64 calladdr_lua = stage_2_addr + x86_stage_2_shellcode_size_lua;
+					// x86 uses absolute address in call/jmp, offset positions shift by +5
+					int call_offset_lua = 0x13;
+					*(DWORD*)(stage_2_shellcode_lua + call_offset_lua) = (DWORD)calladdr_lua;
 
-			DWORD64 ff25addr = stage_2_addr + x86_stage_2_shellcode_size + x86_stage_0_placeholder_size;
-			int jmp_offset = 0x16;
-			*(DWORD*)(stage_2_shellcode + jmp_offset) = ff25addr;// -stage_2_addr;
+					DWORD64 ff25addr_lua = stage_2_addr + x86_stage_2_shellcode_size_lua + x86_stage_0_placeholder_size;
+					int jmp_offset_lua = 0x1B;
+					*(DWORD*)(stage_2_shellcode_lua + jmp_offset_lua) = (DWORD)ff25addr_lua;
 
-			if (!WriteProcessMemoryWrap(hProcess, (LPVOID)(stage_2_addr), (void*)(stage_2_shellcode), x86_stage_2_shellcode_size, NULL)) {
-				if (services)
-					LOG_CORE(services, L"ConstructTrampoline line number: %d, error code: 0x%x\n", __LINE__, GetLastError());
-				return false;
-			}
-			DWORD64 ShellcodecallAddr = (DWORD64)tramp_dll_base + stage_2_func_offset_real;
+					if (!WriteProcessMemoryWrap(hProcess, (LPVOID)(stage_2_addr), (void*)(stage_2_shellcode_lua), x86_stage_2_shellcode_size_lua, NULL)) {
+						if (services)
+							LOG_CORE(services, L"ConstructTrampoline line number: %d, error code: 0x%x\n", __LINE__, GetLastError());
+						return false;
+					}
+					DWORD64 ShellcodecallAddr = (DWORD64)tramp_dll_base + stage_2_func_offset_real;
+					if (!WriteProcessMemoryWrap(hProcess, (LPVOID)(calladdr_lua), (void*)(&ShellcodecallAddr), x86_stage_0_placeholder_size, NULL)) {
+						if (services)
+							LOG_CORE(services, L"ConstructTrampoline line number: %d, error code: 0x%x\n", __LINE__, GetLastError());
+						return false;
+					}
+					DWORD64 _2_back_to_1 = x86_stage2_back_to_stage_1_offset + PLACEHOLDER_FUNCIONT_OFFSET + (DWORD64)tramp_dll_base +
+						x86_stage_0_placeholder_size;
+					if (!WriteProcessMemoryWrap(hProcess, (LPVOID)(ff25addr_lua), (void*)(&_2_back_to_1), x86_stage_0_placeholder_size, NULL)) {
+						if (services)
+							LOG_CORE(services, L"ConstructTrampoline line number: %d, error code: 0x%x\n", __LINE__, GetLastError());
+						return false;
+					}
+				}
+				else {
+					// DLL mode: original shellcode
+					DWORD64 calladdr = stage_2_addr + x86_stage_2_shellcode_size;
 
-			if (!WriteProcessMemoryWrap(hProcess, (LPVOID)(calladdr), (void*)(&ShellcodecallAddr), x86_stage_0_placeholder_size, NULL)) {
-				if (services)
-					LOG_CORE(services, L"ConstructTrampoline line number: %d, error code: 0x%x\n", __LINE__, GetLastError());
-				return false;
-			}
-			DWORD64 _2_back_to_1 = x86_stage2_back_to_stage_1_offset + PLACEHOLDER_FUNCIONT_OFFSET + (DWORD64)tramp_dll_base +
-				x86_stage_0_placeholder_size;
-			if (!WriteProcessMemoryWrap(hProcess, (LPVOID)(ff25addr), (void*)(&_2_back_to_1), x86_stage_0_placeholder_size, NULL)) {
-				if (services)
-					LOG_CORE(services, L"ConstructTrampoline line number: %d, error code: 0x%x\n", __LINE__, GetLastError());
-				return false;
-			}
+					int call_offset = 0xe;
+					*(DWORD*)(stage_2_shellcode + call_offset) = calladdr;// -stage_2_addr;
+
+					DWORD64 ff25addr = stage_2_addr + x86_stage_2_shellcode_size + x86_stage_0_placeholder_size;
+					int jmp_offset = 0x16;
+					*(DWORD*)(stage_2_shellcode + jmp_offset) = ff25addr;// -stage_2_addr;
+
+					if (!WriteProcessMemoryWrap(hProcess, (LPVOID)(stage_2_addr), (void*)(stage_2_shellcode), x86_stage_2_shellcode_size, NULL)) {
+						if (services)
+							LOG_CORE(services, L"ConstructTrampoline line number: %d, error code: 0x%x\n", __LINE__, GetLastError());
+						return false;
+					}
+					DWORD64 ShellcodecallAddr = (DWORD64)tramp_dll_base + stage_2_func_offset_real;
+
+					if (!WriteProcessMemoryWrap(hProcess, (LPVOID)(calladdr), (void*)(&ShellcodecallAddr), x86_stage_0_placeholder_size, NULL)) {
+						if (services)
+							LOG_CORE(services, L"ConstructTrampoline line number: %d, error code: 0x%x\n", __LINE__, GetLastError());
+						return false;
+					}
+					DWORD64 _2_back_to_1 = x86_stage2_back_to_stage_1_offset + PLACEHOLDER_FUNCIONT_OFFSET + (DWORD64)tramp_dll_base +
+						x86_stage_0_placeholder_size;
+					if (!WriteProcessMemoryWrap(hProcess, (LPVOID)(ff25addr), (void*)(&_2_back_to_1), x86_stage_0_placeholder_size, NULL)) {
+						if (services)
+							LOG_CORE(services, L"ConstructTrampoline line number: %d, error code: 0x%x\n", __LINE__, GetLastError());
+						return false;
+					}
+				}
 		}
 
 		if (!VirtualProtectEx(hProcess, (LPVOID)(stage_1_func_offset + (DWORD64)tramp_dll_base),
@@ -655,7 +699,7 @@ ff 25 44 33 22 11       jmp    DWORD PTR ds:0x11223344
 		return true;
 	}
 	bool ConstructTrampoline_x64(IHookServices* services, HANDLE hProcess, PVOID hook_addr, PVOID target_base,
-		PVOID tramp_dll_base, DWORD stage_1_func_offset, DWORD stage_2_func_offset, DWORD64 hook_code_addr, DWORD* out_original_asm_len) {
+		PVOID tramp_dll_base, DWORD stage_1_func_offset, DWORD stage_2_func_offset, DWORD64 hook_code_addr, int hook_id, int hook_mode, DWORD* out_original_asm_len) {
 
 		if (!services) {
 			MessageBoxW(NULL, L"Fatal Error! services is NULL!", L"Hook", MB_OK | MB_ICONINFORMATION);
@@ -865,33 +909,74 @@ b:  48 89 5c 24 20          mov    QWORD PTR [rsp+0x20],rbx
 
 
 
-			DWORD64 calladdr = stage_2_addr + stage_2_shellcode_size;
+				if (hook_mode == HOOK_MODE_LUA) {
+					// Lua mode: insert mov rdx, hook_id (10 bytes) before call
+					UCHAR stage_2_shellcode_lua[stage_2_shellcode_size_lua];
+					memcpy(stage_2_shellcode_lua, stage_2_shellcode, 0x10);
+					stage_2_shellcode_lua[0x10] = 0x48;
+					stage_2_shellcode_lua[0x11] = 0xBA;
+					*(DWORD64*)(stage_2_shellcode_lua + 0x12) = (DWORD64)hook_id;
+					memcpy(stage_2_shellcode_lua + 0x1A, stage_2_shellcode + 0x10,
+						stage_2_shellcode_size - 0x10);
 
-			int call_offset = 0x12;
-			*(DWORD*)(stage_2_shellcode + call_offset) = calladdr - stage_2_addr - 0x16;
+					DWORD64 calladdr_lua = stage_2_addr + stage_2_shellcode_size_lua;
+					int call_offset_lua = 0x1C;
+					*(DWORD*)(stage_2_shellcode_lua + call_offset_lua) =
+						(DWORD)(calladdr_lua - stage_2_addr - 0x20);
 
-			DWORD64 ff25addr = stage_2_addr + stage_2_shellcode_size + stage_0_placeholder_size;
-			int jmp_offset = 0x1f;
-			*(DWORD*)(stage_2_shellcode + jmp_offset) = ff25addr - stage_2_addr - 0x23;
+					DWORD64 ff25addr_lua = stage_2_addr + stage_2_shellcode_size_lua + stage_0_placeholder_size;
+					int jmp_offset_lua = 0x29;
+					*(DWORD*)(stage_2_shellcode_lua + jmp_offset_lua) =
+						(DWORD)(ff25addr_lua - stage_2_addr - 0x2D);
 
-			if (!WriteProcessMemoryWrap(hProcess, (LPVOID)(stage_2_addr), (void*)(stage_2_shellcode), stage_2_shellcode_size, NULL)) {
-				if (services)
-					LOG_CORE(services, L"ConstructTrampoline line number: %d, error code: 0x%x\n", __LINE__, GetLastError());
-				return false;
-			}
-			DWORD64 ShellcodecallAddr = (DWORD64)tramp_dll_base + stage_2_func_offset_real;
+					if (!WriteProcessMemoryWrap(hProcess, (LPVOID)(stage_2_addr), (void*)(stage_2_shellcode_lua), stage_2_shellcode_size_lua, NULL)) {
+						if (services)
+							LOG_CORE(services, L"ConstructTrampoline line number: %d, error code: 0x%x\n", __LINE__, GetLastError());
+						return false;
+					}
+					DWORD64 ShellcodecallAddr = (DWORD64)tramp_dll_base + stage_2_func_offset_real;
+					if (!WriteProcessMemoryWrap(hProcess, (LPVOID)(calladdr_lua), (void*)(&ShellcodecallAddr), stage_0_placeholder_size, NULL)) {
+						if (services)
+							LOG_CORE(services, L"ConstructTrampoline line number: %d, error code: 0x%x\n", __LINE__, GetLastError());
+						return false;
+					}
+					DWORD64 _2_back_to_1 = stage2_back_to_stage_1_offset + PLACEHOLDER_FUNCIONT_OFFSET + (DWORD64)tramp_dll_base + stage_0_placeholder_size;
+					if (!WriteProcessMemoryWrap(hProcess, (LPVOID)(ff25addr_lua), (void*)(&_2_back_to_1), stage_0_placeholder_size, NULL)) {
+						if (services)
+							LOG_CORE(services, L"ConstructTrampoline line number: %d, error code: 0x%x\n", __LINE__, GetLastError());
+						return false;
+					}
+				}
+				else {
+					// DLL mode: original shellcode
+					DWORD64 calladdr = stage_2_addr + stage_2_shellcode_size;
 
-			if (!WriteProcessMemoryWrap(hProcess, (LPVOID)(calladdr), (void*)(&ShellcodecallAddr), stage_0_placeholder_size, NULL)) {
-				if (services)
-					LOG_CORE(services, L"ConstructTrampoline line number: %d, error code: 0x%x\n", __LINE__, GetLastError());
-				return false;
-			}
-			DWORD64 _2_back_to_1 = stage2_back_to_stage_1_offset + PLACEHOLDER_FUNCIONT_OFFSET + (DWORD64)tramp_dll_base + stage_0_placeholder_size;
-			if (!WriteProcessMemoryWrap(hProcess, (LPVOID)(ff25addr), (void*)(&_2_back_to_1), stage_0_placeholder_size, NULL)) {
-				if (services)
-					LOG_CORE(services, L"ConstructTrampoline line number: %d, error code: 0x%x\n", __LINE__, GetLastError());
-				return false;
-			}
+					int call_offset = 0x12;
+					*(DWORD*)(stage_2_shellcode + call_offset) = calladdr - stage_2_addr - 0x16;
+
+					DWORD64 ff25addr = stage_2_addr + stage_2_shellcode_size + stage_0_placeholder_size;
+					int jmp_offset = 0x1f;
+					*(DWORD*)(stage_2_shellcode + jmp_offset) = ff25addr - stage_2_addr - 0x23;
+
+					if (!WriteProcessMemoryWrap(hProcess, (LPVOID)(stage_2_addr), (void*)(stage_2_shellcode), stage_2_shellcode_size, NULL)) {
+						if (services)
+							LOG_CORE(services, L"ConstructTrampoline line number: %d, error code: 0x%x\n", __LINE__, GetLastError());
+						return false;
+					}
+					DWORD64 ShellcodecallAddr = (DWORD64)tramp_dll_base + stage_2_func_offset_real;
+
+					if (!WriteProcessMemoryWrap(hProcess, (LPVOID)(calladdr), (void*)(&ShellcodecallAddr), stage_0_placeholder_size, NULL)) {
+						if (services)
+							LOG_CORE(services, L"ConstructTrampoline line number: %d, error code: 0x%x\n", __LINE__, GetLastError());
+						return false;
+					}
+					DWORD64 _2_back_to_1 = stage2_back_to_stage_1_offset + PLACEHOLDER_FUNCIONT_OFFSET + (DWORD64)tramp_dll_base + stage_0_placeholder_size;
+					if (!WriteProcessMemoryWrap(hProcess, (LPVOID)(ff25addr), (void*)(&_2_back_to_1), stage_0_placeholder_size, NULL)) {
+						if (services)
+							LOG_CORE(services, L"ConstructTrampoline line number: %d, error code: 0x%x\n", __LINE__, GetLastError());
+						return false;
+					}
+				}
 		}
 
 		if (!VirtualProtectEx(hProcess, (LPVOID)(stage_1_func_offset + (DWORD64)tramp_dll_base),

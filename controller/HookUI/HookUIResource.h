@@ -15,3 +15,4 @@
 #define IDC_HOOKUI_EDIT_EXPORT      5112
 // Apply Hook Sequence button (replaces default IDCANCEL id to avoid close-icon conflicts)
 #define IDC_HOOKUI_BTN_APPLY_SEQ    5113
+#define IDC_HOOKUI_BTN_RELOAD_LUA  5114

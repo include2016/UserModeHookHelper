@@ -14,6 +14,8 @@ public:
         unsigned long long offset;           // target offset for hooking
         std::wstring dllPath;             // hook code dll path
         std::wstring exportName;          // the export function of hook code dll
+        std::wstring script;              // Lua mode: script file path
+        std::wstring handler;             // Lua mode: handler function name
         std::wstring module;              // target module (the dll that will be monitored)
         std::wstring offsetStr;           // offset string (e.g. "0x220b0")
         std::wstring hookSeqPath;         // path to .hookseq file (for persistence)

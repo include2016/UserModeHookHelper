@@ -11,7 +11,6 @@
 #include "HookUIResource.h"
 #include "../../Shared/HookRow.h"
 #include "../../Shared/HookServices.h"
-#include "DllLoadMonManager.h"
 
 class HookProcDlg : public CDialogEx {
 public:
@@ -20,11 +19,13 @@ public:
     static const UINT kMsgHookDlgDestroyed;
 protected:
 	afx_msg bool HookCommonCode(DWORD64 module_base, DWORD module_offset, std::wstring hook_code_path, std::wstring export_func_name);
+	afx_msg bool HookCommonCodeLua(DWORD64 module_base, DWORD module_offset, std::wstring script_path, std::wstring handler_name);
     virtual BOOL OnInitDialog();
     virtual void DoDataExchange(CDataExchange* pDX) { CDialogEx::DoDataExchange(pDX);}    
     afx_msg void OnDestroy();
     afx_msg void OnBnClickedApplyHook();
     afx_msg void OnBnClickedApplyHookSequence();
+    afx_msg void OnBnClickedReloadLua();
     afx_msg void OnSize(UINT nType, int cx, int cy);
     afx_msg void OnLButtonDown(UINT nFlags, CPoint point);
     afx_msg void OnLButtonUp(UINT nFlags, CPoint point);
@@ -55,10 +56,7 @@ private:
     void UpdateLayoutForSplitter(int cx, int cy);
 	int m_sortColumn=0; bool m_sortAscending=true; static int CALLBACK ModuleCompare(LPARAM, LPARAM, LPARAM);
 
-	// DllLoadMon manager for delayed hooking
-	DllLoadMonManager m_DllLoadMonMgr;
 
-	// 原有成员
     void PopulateHookList();
     int AddHookEntry(const HookRow& row);
 	ULONG64 m_exp_num_tracker_bitfield[4] = {};

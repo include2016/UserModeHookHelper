@@ -56,6 +56,7 @@ void HookProcDlg::OnSize(UINT nType, int cx, int cy) {
 BEGIN_MESSAGE_MAP(HookProcDlg, CDialogEx)
 	ON_BN_CLICKED(IDC_HOOKUI_BTN_APPLY, &HookProcDlg::OnBnClickedApplyHook)
 	ON_BN_CLICKED(IDC_HOOKUI_BTN_APPLY_SEQ, &HookProcDlg::OnBnClickedApplyHookSequence)
+	ON_BN_CLICKED(IDC_HOOKUI_BTN_RELOAD_LUA, &HookProcDlg::OnBnClickedReloadLua)
 	ON_WM_SIZE()
 	ON_WM_CONTEXTMENU()
 	ON_WM_LBUTTONDOWN()
@@ -100,11 +101,11 @@ void HookProcDlg::OnBnClickedApplyHookSequence() {
 	}
 	CString path = fd.GetPathName();
 	// Parse file: lines of key=value; hook blocks denoted by [hook]
-	std::vector<std::tuple<std::wstring, std::wstring, std::wstring, std::wstring>> entries; // module, offset, dllPath, export
+	std::vector<std::tuple<std::wstring, std::wstring, std::wstring, std::wstring, std::wstring, std::wstring>> entries; // module, offset, dllPath, export, script, handler
 	DWORD pidFromFile = 0;
 	FILE* f = _wfopen(path.GetString(), L"rt, ccs=UNICODE");
 	if (!f) { MessageBoxW(L"Failed to open hook sequence file.", L"HookSeq", MB_ICONERROR | MB_OK); return; }
-	wchar_t line[1024]; bool inHook = false; std::wstring module, offset, dllPath, exportFn;
+	wchar_t line[1024]; bool inHook = false; std::wstring module, offset, dllPath, exportFn, script, handler;
 	while (fgetws(line, _countof(line), f)) {
 		// Trim
 		std::wstring s(line); 
@@ -126,13 +127,15 @@ void HookProcDlg::OnBnClickedApplyHookSequence() {
 		if (s[0] == L'#' || (s.size() >= 2 && s[0] == L'/' && s[1] == L'/')) 
 			continue;
 		if (s == L"[hook]") {
-			if (!module.empty() || !offset.empty() || !dllPath.empty() || !exportFn.empty())
+				if (!module.empty() || !offset.empty() || !dllPath.empty() || !exportFn.empty() || !script.empty() || !handler.empty())
 			{
-				entries.emplace_back(module, offset, dllPath, exportFn);
+				entries.emplace_back(module, offset, dllPath, exportFn, script, handler);
 				module.clear();
 				offset.clear();
 				dllPath.clear();
 				exportFn.clear();
+				script.clear();
+				handler.clear();
 			}
 			inHook = true;
 			continue;
@@ -152,10 +155,12 @@ void HookProcDlg::OnBnClickedApplyHookSequence() {
 		else if (_wcsicmp(key.c_str(), L"offset") == 0) offset = val;
 		else if (_wcsicmp(key.c_str(), L"dllPath") == 0) dllPath = val;
 		else if (_wcsicmp(key.c_str(), L"export") == 0) exportFn = val;
+			else if (_wcsicmp(key.c_str(), L"script") == 0) script = val;
+			else if (_wcsicmp(key.c_str(), L"handler") == 0) handler = val;
 	}
 	fclose(f);
-	if (!module.empty() || !offset.empty() || !dllPath.empty() || !exportFn.empty()) 
-		entries.emplace_back(module, offset, dllPath, exportFn);
+		if (!module.empty() || !offset.empty() || !dllPath.empty() || !exportFn.empty() || !script.empty() || !handler.empty()) 
+		entries.emplace_back(module, offset, dllPath, exportFn, script, handler);
 	if (entries.empty()) {
 		MessageBoxW(L"No hooks found in sequence file.", L"HookSeq", MB_ICONWARNING | MB_OK);
 		return;
@@ -168,39 +173,52 @@ void HookProcDlg::OnBnClickedApplyHookSequence() {
 		const std::wstring &off = std::get<1>(e);
 		const std::wstring &dll = std::get<2>(e);
 		const std::wstring &exp = std::get<3>(e);
-		if (mod.empty() || off.empty() || dll.empty() || exp.empty()) {
+		const std::wstring &scr = std::get<4>(e);
+		const std::wstring &hdl = std::get<5>(e);
+		bool isDllMode = !dll.empty() && !exp.empty();
+		bool isLuaModeEntry = !scr.empty() && !hdl.empty();
+		if (mod.empty() || off.empty() || (!isDllMode && !isLuaModeEntry)) {
 			MessageBoxW(L"Invalid hook entry with missing fields.", L"HookSeq", MB_ICONERROR | MB_OK);
 			return;
 		}
-
+		if (isDllMode && isLuaModeEntry) {
+			MessageBoxW(L"Hook entry has both DLL and Lua fields - use one mode.", L"HookSeq", MB_ICONERROR | MB_OK);
+			return;
+		}
 		bool is64 = false;
 		if (!m_services->IsProcess64(targetPid, is64)) {
 			MessageBoxW(L"Failed to query process arch.", L"HookSeq", MB_ICONERROR | MB_OK);
 			return;
 		}
-		bool dll64 = false;
-		if (!m_services->CheckPeArch(dll.c_str(), dll64)) {
-			MessageBoxW(L"DLL arch check failed.", L"HookSeq", MB_ICONERROR | MB_OK);
-			return;
+		if (isDllMode) {
+			bool dll64 = false;
+			if (!m_services->CheckPeArch(dll.c_str(), dll64)) {
+				MessageBoxW(L"DLL arch check failed.", L"HookSeq", MB_ICONERROR | MB_OK);
+				return;
+			}
+			if (dll64 != is64) {
+				MessageBoxW(L"DLL arch mismatches process arch.", L"HookSeq", MB_ICONERROR | MB_OK);
+				return;
+			}
+			DWORD funcOff = 0;
+			if (!m_services->CheckExportFromFile(dll.c_str(), std::string(CW2A(exp.c_str())).c_str(), &funcOff)) {
+				MessageBoxW(L"Export not found in DLL.", L"HookSeq", MB_ICONERROR | MB_OK);
+				return;
+			}
 		}
-		if (dll64 != is64) {
-			MessageBoxW(L"DLL arch mismatches process arch.", L"HookSeq", MB_ICONERROR | MB_OK);
-			return;
-		}
-		DWORD funcOff = 0;
-		if (!m_services->CheckExportFromFile(dll.c_str(), std::string(CW2A(exp.c_str())).c_str(), &funcOff)) {
-			MessageBoxW(L"Export not found in DLL.", L"HookSeq", MB_ICONERROR | MB_OK);
-			return;
-		}
+		// Lua mode: no DLL arch/export validation needed
 	}
 	CString msg;
 	// Apply hooks
-	int applied = 0; 
+	int applied = 0;
 	for (auto &e : entries) {
 		const std::wstring &mod = std::get<0>(e);
 		const std::wstring &off = std::get<1>(e);
 		const std::wstring &dll = std::get<2>(e);
 		const std::wstring &exp = std::get<3>(e);
+		const std::wstring &scr = std::get<4>(e);
+		const std::wstring &hdl = std::get<5>(e);
+		bool isLuaModeEntry = !scr.empty() && !hdl.empty();
 		// Resolve module base
 		bool is64 = false; m_services->IsProcess64(targetPid, is64);
 		DWORD64 base = 0;
@@ -210,12 +228,16 @@ void HookProcDlg::OnBnClickedApplyHookSequence() {
 		}
 		bool ok = true;		DWORD64 offVal = ParseAddressText(off, ok);
 		// apply hook
-		if (!HookCommonCode(base, (DWORD)offVal, dll, exp)) {
+		bool hookOk = false;
+		if (isLuaModeEntry) {
+			hookOk = HookCommonCodeLua(base, (DWORD)offVal, scr, hdl);
+		} else {
+			hookOk = HookCommonCode(base, (DWORD)offVal, dll, exp);
+		}
+		if (!hookOk) {
 			// if any fault detected, we need to roll back and abort
-			LOG_UI(m_services, L"fault detected when trying hooking at Addr=0x%p with hookcode Path=%s Func=%s\n", base + offVal,
-				dll.c_str(), exp.c_str());
+			LOG_UI(m_services, L"fault detected when trying hooking at Addr=0x%p\n", base + offVal);
 			LOG_UI(m_services, L"Rolling back\n");
-			
 			goto RollBack;
 		}
 		// annotate ExpFunc for the created row by matching address
@@ -226,14 +248,18 @@ void HookProcDlg::OnBnClickedApplyHookSequence() {
 		for (int iRow = 0; iRow < m_HookList.GetItemCount(); ++iRow) {
 			HookRow* hr = reinterpret_cast<HookRow*>(m_HookList.GetItemData(iRow));
 			if (hr && hr->address == (base + offVal)) {
-				hr->expFunc = GetFilename(dll) + L"!" + exp;
+				if (isLuaModeEntry) {
+					hr->expFunc = L"Lua:" + scr + L"!" + hdl;
+				} else {
+					hr->expFunc = GetFilename(dll) + L"!" + exp;
+				}
 				m_HookList.SetItemText(iRow, 3, hr->expFunc.c_str());
 				break;
 			}
 		}
 		applied++;
 	}
-	 msg.Format(L"Applied %d hooks from sequence.", applied);
+		 msg.Format(L"Applied %d hooks from sequence.", applied);
 	MessageBoxW(msg, L"HookSeq", MB_OK | MB_ICONINFORMATION);
 	return;
 RollBack:
@@ -303,8 +329,138 @@ RollBack:
 		}
 	}
 }
+
+void HookProcDlg::OnBnClickedReloadLua() {
+	// Collect all Lua-mode hooks from the hook list
+	struct LuaHookInfo { int hookId; std::wstring scriptPath; std::wstring handlerName; };
+	std::vector<LuaHookInfo> luaHooks;
+
+	for (int i = 0; i < m_HookList.GetItemCount(); ++i) {
+		HookRow* hr = reinterpret_cast<HookRow*>(m_HookList.GetItemData(i));
+		if (!hr) continue;
+		// expFunc format for Lua mode: "Lua:<script_path>!<handler_name>"
+		if (hr->expFunc.size() > 5 && hr->expFunc.substr(0, 4) == L"Lua:") {
+			std::wstring rest = hr->expFunc.substr(4);
+			size_t sep = rest.find(L'!');
+			if (sep != std::wstring::npos) {
+				luaHooks.push_back({ hr->id, rest.substr(0, sep), rest.substr(sep + 1) });
+			}
+		}
+	}
+
+	if (luaHooks.empty()) {
+		MessageBox(L"No Lua-mode hooks to reload.", L"Reload Lua", MB_ICONINFORMATION);
+		return;
+	}
+
+	// Get LuaEngine.dll base in target process
+	bool is64 = false;
+	m_services->IsProcess64(m_pid, is64);
+	const wchar_t* luaEngineName = is64 ? LUA_ENGINE_DLL_X64 : LUA_ENGINE_DLL_Win32;
+	DWORD64 luaEngineBase = 0;
+	if (!m_services->GetModuleBase(m_pid, luaEngineName, &luaEngineBase) || luaEngineBase == 0) {
+		MessageBox(L"LuaEngine.dll not loaded in target process.", L"Reload Lua", MB_ICONERROR);
+		return;
+	}
+
+	// Get LuaEngineIPCSlot export offset
+	WCHAR luaEngineNameBuf[MAX_PATH] = { 0 };
+	wcscpy_s(luaEngineNameBuf, luaEngineName);
+	std::wstring luaEngineFullPath = m_services->GetCurrentDirFilePath(luaEngineNameBuf);
+
+	DWORD ipcSlotOffset = 0;
+	if (!m_services->CheckExportFromFile(luaEngineFullPath.c_str(), LUA_ENGINE_PLACEHOLDER_EXP_FUNC, &ipcSlotOffset)) {
+		MessageBox(L"Failed to find LuaEngineIPCSlot export.", L"Reload Lua", MB_ICONERROR);
+		return;
+	}
+
+	PVOID ipcSlotAddr = (PVOID)(luaEngineBase + ipcSlotOffset);
+#ifdef _DEBUG
+	// In debug builds, resolve E9 jmp to get real function address
+	HANDLE hProcDbg = NULL;
+	if (m_services->GetHighAccessProcHandle(m_pid, &hProcDbg) && hProcDbg) {
+		DWORD e9Oprand = 0;
+		ReadProcessMemory(hProcDbg, (LPVOID)((DWORD64)ipcSlotAddr + E9_JMP_INSTRUCTION_OPCODE_SIZE),
+			&e9Oprand, E9_JMP_INSTRUCTION_OPRAND_SIZE, NULL);
+		ipcSlotAddr = (PVOID)((DWORD64)ipcSlotAddr + E9_JMP_INSTRUCTION_SIZE + e9Oprand);
+		CloseHandle(hProcDbg);
+	}
+#endif
+
+	int reloaded = 0;
+	int failed = 0;
+
+	for (const auto& lh : luaHooks) {
+		// Build IPC data: script_path|handler_name
+		WCHAR ipcData[MAX_PATH + 256] = { 0 };
+		int pos = 0;
+		for (size_t i = 0; i < lh.scriptPath.size() && pos < MAX_PATH - 1; i++)
+			ipcData[pos++] = lh.scriptPath[i];
+		ipcData[pos++] = LUA_IPC_SEPARATOR;
+		for (size_t i = 0; i < lh.handlerName.size() && pos < MAX_PATH + 255; i++)
+			ipcData[pos++] = lh.handlerName[i];
+		ipcData[pos] = L'\0';
+
+		// Write IPC data to target process
+		HANDLE hProc = NULL;
+		if (!m_services->GetHighAccessProcHandle(m_pid, &hProc) || !hProc) {
+			LOG_UI(m_services, L"ReloadLua: failed to get high access handle, pid=%u\n", m_pid);
+			failed++;
+			continue;
+		}
+
+		DWORD oldProtect = 0;
+		bool writeOk = false;
+		if (VirtualProtectEx(hProc, (LPVOID)ipcSlotAddr, (pos + 1) * sizeof(WCHAR), PAGE_EXECUTE_READWRITE, &oldProtect)) {
+			SIZE_T written = 0;
+			writeOk = m_services->WriteProcessMemoryWrap(hProc, (LPVOID)ipcSlotAddr,
+				ipcData, (pos + 1) * sizeof(WCHAR), &written);
+			VirtualProtectEx(hProc, (LPVOID)ipcSlotAddr, (pos + 1) * sizeof(WCHAR), oldProtect, &oldProtect);
+		}
+		CloseHandle(hProc);
+
+		if (!writeOk) {
+			LOG_UI(m_services, L"ReloadLua: failed to write IPC data for hookId=%d\n", lh.hookId);
+			failed++;
+			continue;
+		}
+
+		// Signal the event
+		WCHAR eventName[150];
+		swprintf_s(eventName, LUA_ENGINE_UM_SIGNAL_EVENT, m_pid, lh.hookId);
+		HANDLE hEvent = OpenEventW(EVENT_MODIFY_STATE, FALSE, eventName);
+		if (!hEvent) {
+			LOG_UI(m_services, L"ReloadLua: failed to open signal event %s, err=%u\n", eventName, GetLastError());
+			failed++;
+			continue;
+		}
+		SetEvent(hEvent);
+		CloseHandle(hEvent);
+
+		// Wait for loaded event (timeout 3s)
+		WCHAR loadedEventName[150];
+		swprintf_s(loadedEventName, LUA_ENGINE_UM_LOADED_EVENT, m_pid, lh.hookId);
+		HANDLE hLoaded = OpenEventW(SYNCHRONIZE, FALSE, loadedEventName);
+		if (hLoaded) {
+			WaitForSingleObject(hLoaded, 3000);
+			CloseHandle(hLoaded);
+		}
+
+		LOG_UI(m_services, L"ReloadLua: signaled reload for hookId=%d script=%s handler=%s\n",
+			lh.hookId, lh.scriptPath.c_str(), lh.handlerName.c_str());
+		reloaded++;
+	}
+
+	CString msg;
+	if (failed > 0)
+		msg.Format(L"Reloaded %d Lua hook(s), %d failed.", reloaded, failed);
+	else
+		msg.Format(L"Reloaded %d Lua hook(s).", reloaded);
+	MessageBox(msg, L"Reload Lua", MB_OK | (failed ? MB_ICONWARNING : MB_ICONINFORMATION));
+}
+
 HookProcDlg::HookProcDlg(DWORD pid, const std::wstring& name, IHookServices* services, CWnd* parent)
-	: CDialogEx(IDD_HOOKUI_PROC_DLG, parent), m_pid(pid), m_name(name), m_services(services), m_DllLoadMonMgr(services) {
+	: CDialogEx(IDD_HOOKUI_PROC_DLG, parent), m_pid(pid), m_name(name), m_services(services) {
 }
 
 BOOL HookProcDlg::CreateModeless(CWnd* parent) { return Create(IDD_HOOKUI_PROC_DLG, parent); }
@@ -429,8 +585,10 @@ void HookProcDlg::UpdateLayoutForSplitter(int cx, int cy) {
 		CRect rcExp; exportEdit->GetWindowRect(&rcExp); ScreenToClient(&rcExp);
 		applyX = rcExp.left;
 	}
-	moveCtrl(IDC_HOOKUI_BTN_APPLY, applyX, applyY, btnW, btnH);
-	moveCtrl(IDC_HOOKUI_BTN_APPLY_SEQ, applyX + btnW + 5, applyY, btnW, btnH);
+	int applyBtnW = 65; int seqBtnW = 95; int reloadBtnW = 65;
+	moveCtrl(IDC_HOOKUI_BTN_APPLY, applyX, applyY, applyBtnW, btnH);
+	moveCtrl(IDC_HOOKUI_BTN_APPLY_SEQ, applyX + applyBtnW + 5, applyY, seqBtnW, btnH);
+	moveCtrl(IDC_HOOKUI_BTN_RELOAD_LUA, applyX + applyBtnW + 5 + seqBtnW + 5, applyY, reloadBtnW, btnH);
 	int hooksY = applyY + btnH + 2;
 	int hooksH = listTop + listHeight - hooksY; if (hooksH < 40) hooksH = 40;
 	moveCtrl(IDC_HOOKUI_LIST_HOOKS, panelX, hooksY, hooksW, hooksH);
@@ -945,7 +1103,7 @@ bool HookProcDlg::HookCommonCode(DWORD64 module_base, DWORD module_offset,std::w
 		}
 	}
 	
-	bool success = HookCore::ApplyHook(m_pid, module_base+module_offset, m_services, hook_code_dll_base + hook_code_offset, assignedHookId, &ori_asm_code_len,
+	bool success = HookCore::ApplyHook(m_pid, module_base+module_offset, m_services, hook_code_dll_base + hook_code_offset, assignedHookId, HOOK_MODE_DLL, &ori_asm_code_len,
 		&trampoline_pit, &ori_asm_code_addr);
 	if (success) {
 		// once hook succeed we need to mark hookid unvaliable
@@ -987,6 +1145,166 @@ bool HookProcDlg::HookCommonCode(DWORD64 module_base, DWORD module_offset,std::w
 	}
 	return false;
 }
+
+bool HookProcDlg::HookCommonCodeLua(DWORD64 module_base, DWORD module_offset, std::wstring script_path, std::wstring handler_name) {
+	bool is64 = false;
+	m_services->IsProcess64(m_pid, is64);
+
+	WCHAR luaEngineName[MAX_PATH] = { 0 };
+	wcscpy_s(luaEngineName, is64 ? LUA_ENGINE_DLL_X64 : LUA_ENGINE_DLL_Win32);
+	std::wstring luaEngineFullPath = m_services->GetCurrentDirFilePath(luaEngineName);
+	// Lua mode: hook using LuaEngine.dll dispatch function
+	// 1. Get LuaEngine.dll base in target process
+	DWORD64 luaEngineBase = 0;
+	if (m_services->GetModuleBase(m_pid, is64 ? LUA_ENGINE_DLL_X64 : LUA_ENGINE_DLL_Win32, &luaEngineBase) && luaEngineBase != 0) {
+		LOG_UI(m_services, L"HookCommonCodeLua: LuaEngine.dll already loaded at 0x%llX (pid %u)\n", luaEngineBase, m_pid);
+	}
+	else {
+		LOG_UI(m_services, L"HookCommonCodeLua: LuaEngine.dll not loaded, requesting injection (pid %u)\n", m_pid);
+		
+		bool injected = m_services->InjectTrampoline(m_pid, luaEngineFullPath.c_str());
+		LOG_UI(m_services, L"HookCommonCodeLua: %s inject result: %s\n", is64 ? LUA_ENGINE_DLL_X64 : LUA_ENGINE_DLL_Win32, injected ? L"success" : L"failure");
+		if (injected) {
+			const int maxIter = 50;
+			bool loaded = false;
+			for (int iter = 0; iter < maxIter && !loaded; ++iter) {
+				m_services->GetModuleBase(m_pid, is64 ? LUA_ENGINE_DLL_X64 : LUA_ENGINE_DLL_Win32, &luaEngineBase);
+				if (luaEngineBase != 0) {
+					loaded = true;
+					break;
+				}
+				Sleep(100);
+			}
+			if (!loaded) {
+				LOG_UI(m_services, L"HookCommonCodeLua: %s NOT detected within 5s after injection (pid %u)\n", is64 ? LUA_ENGINE_DLL_X64 : LUA_ENGINE_DLL_Win32, m_pid);
+				return false;
+			}
+			LOG_UI(m_services, L"HookCommonCodeLua: %s detected at 0x%llX after injection (pid %u)\n", is64 ? LUA_ENGINE_DLL_X64 : LUA_ENGINE_DLL_Win32, luaEngineBase, m_pid);
+		}
+		else {
+			LOG_UI(m_services, L"HookCommonCodeLua: failed to inject %s (pid %u), aborting\n", is64 ? LUA_ENGINE_DLL_X64 : LUA_ENGINE_DLL_Win32, m_pid);
+			return false;
+		}
+	}
+
+	// 2. Get dispatch export offset
+	const char* dispatchName = is64 ? LUA_ENGINE_EXPORT_X64 : LUA_ENGINE_EXPORT_Win32;
+	DWORD dispatchOffset = 0;
+	if (!m_services->CheckExportFromFile(luaEngineFullPath.c_str(), dispatchName, &dispatchOffset)) {
+		LOG_UI(m_services, L"failed to get LuaEngine dispatch export: %S\n", dispatchName);
+		MessageBox(L"Failed to find LuaEngine dispatch export", L"Hook", MB_OK | MB_ICONERROR);
+		return false;
+	}
+	DWORD64 hook_code_addr = luaEngineBase + dispatchOffset;
+
+	// 3. Check for rehook
+	DWORD64 addr = module_base + module_offset;
+	for (int i = 0; i < m_HookList.GetItemCount(); ++i) {
+		HookRow* hr = reinterpret_cast<HookRow*>(m_HookList.GetItemData(i));
+		if (!hr) continue;
+		if (hr->address == addr) {
+			LOG_UI(m_services, L"rehook detected at 0x%llX\n", addr);
+			if (!HookCore::RemoveHook(m_pid, addr, m_services, hr->id, hr->ori_asm_code_len, (PVOID)hr->trampoline_pit)) {
+				MessageBox(L"Failed to remove hook before rehooking", L"Hook", MB_OK | MB_ICONERROR);
+				return false;
+			}
+			_bittestandreset((LONG*)m_exp_num_tracker_bitfield, hr->id);
+			FILETIME createTime{ 0,0 }; HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, m_pid);
+			if (h) { FILETIME et, k, u; if (GetProcessTimes(h, &createTime, &et, &k, &u)) {} CloseHandle(h); }
+			DWORD hi = createTime.dwHighDateTime; DWORD lo = createTime.dwLowDateTime;
+			(void)m_services->RemoveProcHookEntry(m_pid, hi, lo, hr->id);
+		}
+	}
+
+	// 4. Allocate hook ID
+	DWORD ori_asm_code_len = 0;
+	PVOID trampoline_pit = 0;
+	PVOID ori_asm_code_addr = 0;
+	int assignedHookId = 0;
+	for (size_t i = 0; i < TRAMPOLINE_EXP_NUM_MAX; i++) {
+		if (!_bittest((LONG*)m_exp_num_tracker_bitfield, i)) {
+			assignedHookId = i;
+			break;
+		}
+	}
+
+	// 5. Signal LuaEngine to load the script
+	DWORD ipcSlotOffset = 0;
+	if (m_services->CheckExportFromFile(luaEngineFullPath.c_str(), LUA_ENGINE_PLACEHOLDER_EXP_FUNC, &ipcSlotOffset)) {
+		PVOID ipcSlotAddr = (PVOID)(luaEngineBase + ipcSlotOffset);
+#ifdef _DEBUG
+		// In debug builds the export function starts with a jmp instruction;
+		// resolve the real address by reading the jmp operand.
+		HANDLE hProcDbg = NULL;
+		if (m_services->GetHighAccessProcHandle(m_pid, &hProcDbg) && hProcDbg) {
+			DWORD oldProtect1 = 0;
+			VirtualProtectEx(hProcDbg, (LPVOID)((DWORD64)ipcSlotAddr + E9_JMP_INSTRUCTION_OPCODE_SIZE), E9_JMP_INSTRUCTION_OPRAND_SIZE, PAGE_EXECUTE_READWRITE, &oldProtect1);
+			DWORD e9Oprand = 0;
+			ReadProcessMemory(hProcDbg, (LPVOID)((DWORD64)ipcSlotAddr + E9_JMP_INSTRUCTION_OPCODE_SIZE), &e9Oprand, E9_JMP_INSTRUCTION_OPRAND_SIZE, NULL);
+			ipcSlotAddr = (PVOID)((DWORD64)ipcSlotAddr + E9_JMP_INSTRUCTION_SIZE + e9Oprand);
+			VirtualProtectEx(hProcDbg, (LPVOID)((DWORD64)luaEngineBase + ipcSlotOffset + E9_JMP_INSTRUCTION_OPCODE_SIZE), E9_JMP_INSTRUCTION_OPRAND_SIZE, oldProtect1, &oldProtect1);
+			CloseHandle(hProcDbg);
+		}
+#endif
+		WCHAR ipcData[MAX_PATH + 256] = { 0 };
+		int pos = 0;
+		for (size_t i = 0; i < script_path.size() && pos < MAX_PATH - 1; i++)
+			ipcData[pos++] = script_path[i];
+		ipcData[pos++] = L'|';
+		for (size_t i = 0; i < handler_name.size() && pos < MAX_PATH + 255; i++)
+			ipcData[pos++] = handler_name[i];
+		ipcData[pos] = L'\0';
+
+		HANDLE hProc = NULL;
+		if (!m_services->GetHighAccessProcHandle(m_pid, &hProc) || !hProc) {
+			LOG_UI(m_services, L"HookCommonCodeLua: failed to get high access process handle, pid=%u\n", m_pid);
+		}
+		else {
+			DWORD oldProtect = 0;
+			if (VirtualProtectEx(hProc, (LPVOID)ipcSlotAddr, (pos + 1) * sizeof(WCHAR), PAGE_EXECUTE_READWRITE, &oldProtect)) {
+				SIZE_T written = 0;
+				m_services->WriteProcessMemoryWrap(hProc, (LPVOID)ipcSlotAddr, ipcData, (pos + 1) * sizeof(WCHAR), &written);
+				VirtualProtectEx(hProc, (LPVOID)ipcSlotAddr, (pos + 1) * sizeof(WCHAR), oldProtect, &oldProtect);
+			}
+			CloseHandle(hProc);
+		}
+		WCHAR eventName[150];
+		swprintf_s(eventName, LUA_ENGINE_UM_SIGNAL_EVENT, m_pid, assignedHookId);
+		HANDLE hEvent = OpenEventW(EVENT_MODIFY_STATE, FALSE, eventName);
+		if (hEvent) {
+			SetEvent(hEvent);
+			CloseHandle(hEvent);
+		}
+	}
+
+	// 6. Apply hook
+	bool success = HookCore::ApplyHook(m_pid, module_base + module_offset, m_services, hook_code_addr, assignedHookId, HOOK_MODE_LUA, &ori_asm_code_len,
+		&trampoline_pit, &ori_asm_code_addr);
+	if (success) {
+		if (_bittestandset((LONG*)m_exp_num_tracker_bitfield, assignedHookId)) {
+			MessageBox(L"hook id reuse detected, abort!", L"Hook", MB_OK | MB_ICONERROR);
+			return false;
+		}
+		LOG_UI(m_services, L"LuaHook ApplyHook succeeded at 0x%llX\n", addr);
+		HookRow r; r.id = assignedHookId; r.address = addr; r.module = L"(unknown)";
+		ULONGLONG moduleBase = 0;
+		std::vector<HookCore::ModuleInfo> mods; HookCore::EnumerateModules(m_pid, mods);
+		for (auto &m : mods) {
+			if (addr >= m.base && addr < m.base + m.size) { r.module = m.name; moduleBase = m.base; break; }
+		}
+		r.ori_asm_code_len = ori_asm_code_len; r.trampoline_pit = (unsigned long long)trampoline_pit;
+		r.ori_asm_code_addr = (DWORD64)ori_asm_code_addr;
+		r.expFunc = L"Lua:" + script_path + L"!" + handler_name;
+		AddHookEntry(r);
+		return true;
+	}
+	else {
+		LOG_UI(m_services, L"LuaHook ApplyHook failed at 0x%llX\n", addr);
+		MessageBox(L"Hook failed", L"Hook", MB_OK | MB_ICONERROR);
+	}
+	return false;
+}
+
 void HookProcDlg::OnBnClickedApplyHook() {
 	// If the target process no longer exists, close this modeless dialog to avoid acting on a dead PID.
 	bool procFound = false;
@@ -1037,30 +1355,7 @@ void HookProcDlg::OnBnClickedApplyHook() {
 		// Verify the module is actually loaded by querying the process
 		DWORD64 actualBase = 0;
 		if (!m_services->GetModuleBase(m_pid, modName.c_str(), &actualBase) || actualBase == 0) {
-			// Module not loaded - offer delayed hook option
-			int result = MessageBox((L"Module '" + modName + L"' is not currently loaded in the target process.\n\n"
-				L"Do you want to register for delayed hooking?\n"
-				L"The hook will be applied automatically when the module loads.").c_str(),
-				L"Module Not Loaded", MB_YESNO | MB_ICONQUESTION);
-			
-			if (result == IDYES) {
-				// Register module watch
-				m_DllLoadMonMgr.RegisterModuleWatch(m_pid, modName.c_str());
-				
-				// Store pending hook with module+offset format
-				ULONGLONG offVal = 0ULL; bool offOk = true;
-				if (!offset.empty()) { offVal = ParseAddressText(offset, offOk); }
-				if (!offOk) { MessageBox(L"Invalid offset. Use hex like 0x200 or leave empty.", L"Hook", MB_ICONERROR); return; }
-				
-				// Get the selected DLL path (we need to prompt for it first)
-				// For now, just register the watch and let user apply hook later
-				LOG_UI(m_services, L"Registered module watch for %s (delayed hook)\n", modName.c_str());
-				MessageBox(L"Module watch registered. The hook will be applied automatically when the module loads.", L"Delayed Hook", MB_OK | MB_ICONINFORMATION);
-				return;
-			}
-			else {
-				return; // User cancelled
-			}
+			MessageBox(L"target module is not loaded yet.", L"Hook", MB_ICONERROR); return;
 		}
 		
 		// Module is loaded, use the actual base address (not stale UI data)
