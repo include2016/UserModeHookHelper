@@ -1043,7 +1043,7 @@ OnProcessAttach(
 		do {
 			// first check if dealy_hook.hash exist, we can reuse CheckSignalFile, only change format
 		if (CheckSignalFile((UCHAR*)ntPath, len, DELAY_HOOK_SIGNAL_FILE_FMT, TRUE)) {
-			DbgBreakPoint();
+			
 #ifdef _WIN64
 			// x64: write place holder function to GetRdi code: mov rax, rdi; ret
 			{
