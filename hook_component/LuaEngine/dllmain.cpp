@@ -106,6 +106,7 @@ VOID Log(_In_ PCWSTR Format, ...) {
     PVOID rbp = (PVOID)*(DWORD64*)((UCHAR*)(ULONG_PTR)(rsp) + 0x40);         \
     PVOID rdi = (PVOID)*(DWORD64*)((UCHAR*)(ULONG_PTR)(rsp) + 0x48);         \
     PVOID rsi = (PVOID)*(DWORD64*)((UCHAR*)(ULONG_PTR)(rsp) + 0x50);         \
+    PVOID rdx = (PVOID)*(DWORD64*)((UCHAR*)(ULONG_PTR)(rsp) + 0x58);         \
     PVOID rbx = (PVOID)*(DWORD64*)((UCHAR*)(ULONG_PTR)(rsp) + 0x68);         \
     PVOID rax = (PVOID)*(DWORD64*)((UCHAR*)(ULONG_PTR)(rsp) + 0x70);
 
@@ -161,20 +162,20 @@ static void push_register_table_x64(lua_State* L,
 }
 
 // x86 version: all registers are on the stack starting at original_esp
-static void push_register_table_x86(lua_State* L, ULONG_PTR original_esp)
+static void push_register_table_x86(lua_State* L, ULONG_PTR ebp, ULONG_PTR edi, ULONG_PTR esi, 
+	ULONG_PTR edx, ULONG_PTR ecx, ULONG_PTR ebx, ULONG_PTR eax, ULONG_PTR esp)
 {
     lua_createtable(L, 0, 8);
     // x86 registers are pushed in stage_1 order:
     // pushad saves: eax, ecx, edx, ebx, esp(original), ebp, esi, edi
-    ULONG_PTR* regs = (ULONG_PTR*)original_esp;
-    lua_pushinteger(L, (lua_Integer)regs[7]);  lua_setfield(L, -2, "edi");
-    lua_pushinteger(L, (lua_Integer)regs[6]);  lua_setfield(L, -2, "esi");
-    lua_pushinteger(L, (lua_Integer)regs[5]);  lua_setfield(L, -2, "ebp");
-    lua_pushinteger(L, (lua_Integer)regs[3]);  lua_setfield(L, -2, "ebx");
-    lua_pushinteger(L, (lua_Integer)regs[2]);  lua_setfield(L, -2, "edx");
-    lua_pushinteger(L, (lua_Integer)regs[1]);  lua_setfield(L, -2, "ecx");
-    lua_pushinteger(L, (lua_Integer)regs[0]);  lua_setfield(L, -2, "eax");
-    lua_pushinteger(L, (lua_Integer)regs[4]);  lua_setfield(L, -2, "esp");
+    lua_pushinteger(L, (lua_Integer)edi);  lua_setfield(L, -2, "edi");
+	lua_pushinteger(L, (lua_Integer)esi);  lua_setfield(L, -2, "esi");
+	lua_pushinteger(L, (lua_Integer)ebp);  lua_setfield(L, -2, "ebp");
+	lua_pushinteger(L, (lua_Integer)ebx);  lua_setfield(L, -2, "ebx");
+	lua_pushinteger(L, (lua_Integer)edx);  lua_setfield(L, -2, "edx");
+	lua_pushinteger(L, (lua_Integer)ecx);  lua_setfield(L, -2, "ecx");
+	lua_pushinteger(L, (lua_Integer)eax);  lua_setfield(L, -2, "eax");
+	lua_pushinteger(L, (lua_Integer)esp);  lua_setfield(L, -2, "esp");
 }
 
 // ---- C binding: mem library ----
@@ -396,10 +397,10 @@ extern "C" __declspec(dllexport) VOID LuaHookDispatch_X64(
     // TODO: extract actual register values from the trampoline save area
     // For Phase 1, push a basic table with the known parameters
     push_register_table_x64(L,
-        (ULONG_PTR)rcx, 0 /* original rdx from save area */,
+        (ULONG_PTR)rcx, (ULONG_PTR)rdx /* original rdx from save area */,
         (ULONG_PTR)r8, (ULONG_PTR)r9,
-        0 /* rax */, 0 /* rbx */, 0 /* rbp */,
-        0 /* rsi */, 0 /* rdi */, (ULONG_PTR)rsp);
+		(ULONG_PTR)rax, (ULONG_PTR)rbx , (ULONG_PTR)rbp ,
+		(ULONG_PTR)rsi, (ULONG_PTR)rdi, (ULONG_PTR)original_rsp);
 
     // Call the Lua handler
     if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
@@ -432,7 +433,8 @@ extern "C" __declspec(dllexport) VOID LuaHookDispatch_Win32(ULONG esp)
     if (!L || ref == LUA_NOREF) return;
 
     lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
-    push_register_table_x86(L, (ULONG_PTR)original_esp);
+    push_register_table_x86(L, (ULONG_PTR)ebp, (ULONG_PTR)edi, (ULONG_PTR)esi, 
+		(ULONG_PTR)edx, (ULONG_PTR)ecx, (ULONG_PTR)ebx, (ULONG_PTR)eax,(ULONG_PTR)original_esp);
 
     if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
         const char* err = lua_tostring(L, -1);

@@ -24,6 +24,36 @@ shutdown /g /t 1 /f
 
 增加Lua hook模式，通过lua脚本来编写hook逻辑，并且支持热更新
 
+下面的视频演示了lua hook模式以及热更新功能
+
+https://github.com/user-attachments/assets/8934fb78-3c1a-46f7-8853-f09f33533084
+
+hookseq example：
+
+```
+[hook]
+module=kernel32.dll
+offset=0x57160
+script=C:\Users\x\Desktop\project\umhh\controller\UMController\createfilewhook.lua
+handler=on_hook
+```
+
+hook.lua example:
+
+```
+function on_hook(regs)
+      -- regs 是一个表，x64 下包含:
+      --   regs.rcx, regs.rdx, regs.r8, regs.r9
+      --   regs.rax, regs.rbx, regs.rbp, regs.rsi, regs.rdi, regs.rsp
+      -- x86 下包含:
+      --   regs.eax, regs.ecx, regs.edx, regs.ebx, regs.ebp, regs.esi, regs.edi, regs.esp
+
+      log("file open, Path=" .. mem.read_wstring(regs.rcx))
+end
+```
+
+[目前已实现的binding](https://github.com/wqreytuk/UserModeHookHelper/blob/41f7da0cf85870779f9222016351b9706aef925b/hook_component/LuaEngine/dllmain.cpp#L259)
+
 
 
 ## 2026-05-20
