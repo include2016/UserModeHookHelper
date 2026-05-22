@@ -62,6 +62,16 @@ typora/
 # Local helper script (not tracked)
 append_self.bat
 
+# Force-track product, lib, libs, include directories and their contents
+!product/
+!product/**
+!lib/
+!lib/**
+!libs/
+!libs/**
+!include/
+!include/**
+
 # Local test artifacts (ignored)
 test_append3.txt
 test_append4.txt
