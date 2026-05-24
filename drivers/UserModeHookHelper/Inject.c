@@ -7,7 +7,8 @@
 #include "UKShared.h"
 #include "FltCommPort.h"
 #include "tag.h"
-
+#include "KernelOffsets.h"
+#include "mini.h"
 
 
 typedef struct _INJ_SYSTEM_DLL_DESCRIPTOR
@@ -252,6 +253,45 @@ NTSTATUS Inject_Perform(PPENDING_INJECT InjectionInfo)
 		return STATUS_INVALID_PARAMETER;
 	}
 
+	// deal with PPL process, this code is copied from FltCommPort.c#1361
+	{
+		EPROCESS_ORI_VALUE ori_value = { 0 };
+		if (PsIsProtectedProcess(InjectionInfo->Process)) {
+			PEPROCESS ep = InjectionInfo->Process;
+			EPROCESS_OFFSETS off;
+			if (KO_GetEprocessOffsets(&off)) {
+				if (!Mini_ReadKernelMemory((PVOID)((PUCHAR)ep + off.SectionSignatureLevelOffset), &ori_value.SectionSignatureLevelValue, sizeof(UCHAR))) {
+					Log(L"failed to call Mini_ReadKernelMemory to read out SectionSignatureLevel value, target ep=0x%p\n", ep);
+					ObDereferenceObject(ep);
+					return STATUS_UNSUCCESSFUL;
+				}
+
+				if (!Mini_ReadKernelMemory((PVOID)((PUCHAR)ep + off.ProtectionOffset), &ori_value.ProtectionValue, sizeof(UCHAR))) {
+					Log(L"failed to call Mini_ReadKernelMemory to read out Protection value, target ep=0x%p\n", ep);
+					ObDereferenceObject(ep);
+					return STATUS_UNSUCCESSFUL;
+				}
+				Log(L"get target ep=0x%p's original SectionSignatureLevel=%d, original Protection=%d\n",
+					ep, ori_value.SectionSignatureLevelValue, ori_value.ProtectionValue);
+				UCHAR _ = 0;
+				
+				if (!Mini_WriteKernelMemory((PVOID)((PUCHAR)ep + off.SectionSignatureLevelOffset), &_, sizeof(UCHAR))) {
+					Log(L"failed to call Mini_WriteKernelMemory to write in SectionSignatureLeve, target ep=0x%p\n", ep);
+					ObDereferenceObject(ep);
+					return STATUS_UNSUCCESSFUL;
+				}
+				Log(L"successfully zero out SectionSignatureLevel field of target process, target ep=0x%p\n", ep);
+			}
+			else {
+				ObDereferenceObject(ep);
+				DRIVERCTX_OSVER ver = DriverCtx_GetOsVersion();
+				Log(L"unsupported windows version, Major=%u Build=%u", ver.Major, ver.Build);
+				return STATUS_UNSUCCESSFUL;
+			}
+		}
+	}
+
+
 	PVOID ldrFuncAddr = InjectionInfo->LdrLoadDllRoutineAddress;
 
 	OBJECT_ATTRIBUTES   ObjectAttributes;
@@ -333,7 +373,7 @@ NTSTATUS Inject_Perform(PPENDING_INJECT InjectionInfo)
 		Log(L"failed to remap from Inject_Perform: 0x%x\n", status);
 		goto CLEAN_UP;
 	}
-
+	
 	ApcRoutineAddress = SectionMemoryAddress;
 	DllPath = (PWCHAR)((PUCHAR)SectionMemoryAddress + InjThunk[x64].Length);
 
