@@ -1934,7 +1934,8 @@ void CUMControllerDlg::OnNMRClickListProc(NMHDR *pNMHDR, LRESULT *pResult)
 	} else {
 		menu.AppendMenu(MF_STRING, ID_MENU_SET_INSTANT_HOOK, L"Enable Instant Hook");
 	}
-	// Temporarily hide PPL operations (Recover/Unprotect) from context menu
+	menu.AppendMenu(MF_STRING, ID_MENU_UNPROTECT_PPL, L"Unprotect PPL");
+	menu.AppendMenu(MF_STRING, ID_MENU_ELEVATE_TO_PPL, L"Recover PPL");
 
 	// grey out certai menu based on bInHookList
 	DWORD flags = FLAGS_FROM_ITEMDATA(packed);

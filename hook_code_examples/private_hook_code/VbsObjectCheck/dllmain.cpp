@@ -102,7 +102,7 @@ extern "C" __declspec(dllexport) VOID HookCodeX64(PVOID rcx, PVOID rdx, PVOID r8
 
 	// WRITE YOUR CODE HERE
 
-	Log(L"hook here");
+	Log(L"path=%s\n", rcx);
 
 	// HOOK CODE END
 
