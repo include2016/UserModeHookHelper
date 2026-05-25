@@ -41,7 +41,11 @@ static unsigned long long ComputeFnvHash(const WCHAR* str, USHORT charCount, boo
 #define MIN_HOOK_BYTES 7   // jmp rel32 (E9 <4bytes>) = 5
 #endif
 static bool WriteJump(PVOID addr, PVOID target);
-
+NTSTATUS CopyFileWithTimestampFolder(
+	PUNICODE_STRING SourceFile,
+	WCHAR* OutPath,
+	ULONG OutPathCch
+);
 // InstantHook target list (for delay hook feature)
 struct InstantHookTarget {
 	wchar_t targetDllName[MAX_PATH];        // target dll name
@@ -1127,9 +1131,30 @@ OnProcessAttach(
 				}
 				UNICODE_STRING dllPathUs;
 				RtlInitUnicodeString(&dllPathUs, pNode->dllPath);
+
+				// copy to random path
+				UNICODE_STRING dllPathUsNew;
+				WCHAR outPath[MAX_PATH];
+				{
+					DbgBreakPoint();
+					NTSTATUS st = CopyFileWithTimestampFolder(&dllPathUs, outPath, MAX_PATH);
+					if (0 != st) {
+						EtwLog(L"failed to call CopyFileWithTimestampFolder, Error=0x%x\n", st);
+						EtwLog(L"fall back to use original path\n");
+						RtlInitUnicodeString(&dllPathUsNew, pNode->dllPath);
+					}
+					else {
+						EtwLog(L"hook code dll path: %s\n", outPath);
+						/*
+						skip \??\ 
+						*/
+						RtlInitUnicodeString(&dllPathUsNew, outPath+4);
+					}
+				}
+
 				HANDLE hModule = NULL;
 				ULONG flags = 0;
-				NTSTATUS loadStatus = pLdrLoadDll(NULL, &flags, &dllPathUs, &hModule);
+				NTSTATUS loadStatus = pLdrLoadDll(NULL, &flags, &dllPathUsNew, &hModule);
 				if (!NT_SUCCESS(loadStatus)) {
 					EtwLog(L"Failed to load hook code dll: %s, status=0x%x\n", pNode->dllPath, loadStatus);
 				}
@@ -2224,4 +2249,198 @@ void __fastcall LdrLoadDll_HookHandler(PVOID rcx, PVOID rdx, PVOID r8, PVOID r9,
 		}
 		ppNode = &node->next;
 	}
+}
+
+
+NTSTATUS CopyFileWithTimestampFolder(
+	PUNICODE_STRING SourceFile,
+	WCHAR* OutPath,
+	ULONG OutPathCch
+)
+{
+	HANDLE hSrc = NULL, hDst = NULL;
+	IO_STATUS_BLOCK iosb = { 0 };
+	LARGE_INTEGER offset = { 0 };
+	BYTE buffer[0x1000];
+
+	LARGE_INTEGER sysTime;
+	NtQuerySystemTime(&sysTime);
+
+	// -------------------------
+	// 1. split path
+	// -------------------------
+	WCHAR* lastSlash = wcsrchr(SourceFile->Buffer, L'\\');
+	if (!lastSlash)
+		return STATUS_INVALID_PARAMETER;
+
+	// directory start length
+	size_t dirLen = lastSlash - SourceFile->Buffer + 1;
+	const WCHAR* fileName = lastSlash + 1;
+
+	// -------------------------
+	// 2. concate path
+	// C:\test\<timestamp>\a.txt
+	// -------------------------
+	int n = swprintf_s(
+		OutPath,
+		OutPathCch,
+		L"\\??\\%.*s%llu\\%s",
+		(int)(dirLen),        
+		SourceFile->Buffer,   
+        sysTime.QuadPart,
+		fileName
+	);
+
+	if (n <= 0 || (ULONG)n >= OutPathCch)
+		return STATUS_BUFFER_TOO_SMALL;
+
+	// -------------------------
+	// 3. create directory
+	// -------------------------
+	WCHAR dir[MAX_PATH];
+	swprintf_s(
+		dir,
+		MAX_PATH,
+		L"\\??\\%.*s%llu\\",
+		(int)(dirLen),
+		SourceFile->Buffer,
+		sysTime.QuadPart
+	);
+
+	UNICODE_STRING udir;
+	RtlInitUnicodeString(&udir, dir);
+
+	OBJECT_ATTRIBUTES oaDir;
+	InitializeObjectAttributes(
+		&oaDir,
+		&udir,
+		OBJ_CASE_INSENSITIVE,
+		NULL,
+		NULL
+	);
+
+	NTSTATUS st=NtCreateFile(
+		&hDst,
+		FILE_LIST_DIRECTORY,
+		&oaDir,
+		&iosb,
+		NULL,
+		FILE_ATTRIBUTE_DIRECTORY,
+		FILE_SHARE_READ | FILE_SHARE_WRITE,
+		FILE_CREATE,
+		FILE_DIRECTORY_FILE,
+		NULL,
+		0
+	);
+	if (st != 0) {
+		EtwLog(L"failed to create folder %s, Error=0x%x\n", dir, st);
+		return st;
+	}
+	NtClose(hDst);
+
+	WCHAR nt_src_file[MAX_PATH] = { 0 };
+	swprintf_s(
+		nt_src_file,
+		MAX_PATH,
+		L"\\??\\%.*s",
+		(int)(SourceFile->Length/sizeof(WCHAR)),
+		SourceFile->Buffer
+	);
+
+
+	// -------------------------
+	// 4. open source file
+	// -------------------------
+	{
+		UNICODE_STRING us;
+		RtlInitUnicodeString(&us, nt_src_file);
+		OBJECT_ATTRIBUTES oa;
+		InitializeObjectAttributes(&oa, &us, OBJ_CASE_INSENSITIVE, NULL, NULL);
+
+		IO_STATUS_BLOCK iosb;
+		NTSTATUS status = NtOpenFile(&hSrc, FILE_GENERIC_READ, &oa, &iosb, FILE_SHARE_READ, FILE_SYNCHRONOUS_IO_NONALERT);
+		if (!NT_SUCCESS(status)) {
+			EtwLog(L"failed to open source file, Path=%s\n", nt_src_file);
+			return status;
+		}
+	}
+
+	// -------------------------
+	// 5. open target file
+	// -------------------------
+
+	{
+		OBJECT_ATTRIBUTES oa;
+		UNICODE_STRING usPath;
+		RtlInitUnicodeString(&usPath, OutPath);
+		InitializeObjectAttributes(&oa, &usPath, OBJ_CASE_INSENSITIVE, NULL, NULL);
+
+		IO_STATUS_BLOCK iosb;
+
+
+		// Create/open file
+		NTSTATUS status = NtCreateFile(&hDst,
+			FILE_GENERIC_WRITE | SYNCHRONIZE,
+			&oa,
+			&iosb,
+			NULL,
+			FILE_ATTRIBUTE_NORMAL,
+			0,
+			FILE_OVERWRITE_IF,
+			FILE_SYNCHRONOUS_IO_NONALERT,
+			NULL,
+			0);
+
+		if (!NT_SUCCESS(status)) { 
+			EtwLog(L"failed to open target file, Path=%s\n", OutPath);
+			return status;
+		}
+	}
+	NTSTATUS status = 0;
+	// -------------------------
+	// 6. copy loop
+	// -------------------------
+	while (1)
+	{
+		status = NtReadFile(
+			hSrc,
+			NULL,
+			NULL,
+			NULL,
+			&iosb,
+			buffer,
+			sizeof(buffer),
+			&offset,
+			NULL
+		);
+
+		if (!NT_SUCCESS(status) || iosb.Information == 0)
+			break;
+
+		NTSTATUS wst = NtWriteFile(
+			hDst,
+			NULL,
+			NULL,
+			NULL,
+			&iosb,
+			buffer,
+			(ULONG)iosb.Information,
+			&offset,
+			NULL
+		);
+
+		if (!NT_SUCCESS(wst))
+		{
+			status = wst;
+			break;
+		}
+
+		offset.QuadPart += iosb.Information;
+	}
+
+	NtClose(hSrc);
+	NtClose(hDst);
+	if (status == STATUS_END_OF_FILE)
+		return 0;
+	return status;
 }
