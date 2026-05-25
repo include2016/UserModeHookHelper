@@ -4,7 +4,9 @@
 
 #include <evntprov.h>
 #include "../../../hook_component/HookCodeLib/HookCodeLib.h"
+
 #include <evntrace.h>
+#include <evntcons.h>
 static const GUID ProviderGUID =
 { 0x3da12c0, 0x27c2, 0x4d75, { 0x95, 0x3a, 0x2c, 0x4e, 0x66, 0xa3, 0x74, 0x64 } };
 REGHANDLE g_ProviderHandle;

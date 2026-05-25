@@ -80,6 +80,7 @@ public:
 	afx_msg void OnSize(UINT nType, int cx, int cy);
 	// Context menu: Wake Up stub handler
 	afx_msg void OnWakeUp();
+	afx_msg void OnTerminateProcess();
 	// Set Instant Hook handler
 	afx_msg void OnSetInstantHook();
 	// Removed obsolete OnTimer; enumeration-only mode no longer uses it.

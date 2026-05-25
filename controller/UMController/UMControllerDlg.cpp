@@ -365,6 +365,7 @@ BEGIN_MESSAGE_MAP(CUMControllerDlg, CDialogEx)
 	ON_COMMAND(ID_MENU_ELEVATE_TO_PPL, &CUMControllerDlg::OnElevateToPpl)
 	ON_COMMAND(ID_MENU_UNPROTECT_PPL, &CUMControllerDlg::OnUnprotectPpl)
 	ON_COMMAND(ID_MENU_WAKE_UP, &CUMControllerDlg::OnWakeUp)
+	ON_COMMAND(ID_MENU_TERMINATE_PROCESS, &CUMControllerDlg::OnTerminateProcess)
 	ON_COMMAND(ID_MENU_SET_INSTANT_HOOK, &CUMControllerDlg::OnSetInstantHook)
 END_MESSAGE_MAP()
 // Adapter implementing IHookServices for current process (bridges to ETW tracer)
@@ -1908,6 +1909,7 @@ void CUMControllerDlg::OnNMRClickListProc(NMHDR *pNMHDR, LRESULT *pResult)
 	menu.AppendMenu(MF_SEPARATOR, 0, L"");
 	// Wake Up action (always enabled; handler is TODO stub)
 	menu.AppendMenu(MF_STRING, ID_MENU_WAKE_UP, L"Wake Up");
+	menu.AppendMenu(MF_STRING, ID_MENU_TERMINATE_PROCESS, L"Terminate");
 	menu.AppendMenu(MF_SEPARATOR, 0, L"");
 	menu.AppendMenu(MF_STRING, ID_MENU_INJECT_DLL, L"Inject DLL");
 	// Early-break marking
@@ -2018,6 +2020,34 @@ void CUMControllerDlg::OnWakeUp()
 	else {
 		LOG_CTRL_ETW(L"failed to set Event=%s to wake Pid=%d up, Error=0x%x\n", event_name, pid, GetLastError());
 	}
+}
+
+void CUMControllerDlg::OnTerminateProcess()
+{
+	int nItem = m_ProcListCtrl.GetNextItem(-1, LVNI_SELECTED);
+	if (nItem == -1) return;
+	PROC_ITEMDATA packed = (PROC_ITEMDATA)m_ProcListCtrl.GetItemData(nItem);
+	DWORD pid = PID_FROM_ITEMDATA(packed);
+
+	HANDLE hProc = NULL;
+	if (!g_HookServices.GetHighAccessProcHandle(pid, &hProc) || !hProc) {
+		LOG_CTRL_ETW(L"TerminateProcess: failed to get high access handle for pid=%u\n", pid);
+		MessageBoxW(L"Failed to get a high access process handle.", L"Terminate", MB_OK | MB_ICONERROR);
+		return;
+	}
+
+	BOOL ok = ::TerminateProcess(hProc, 1);
+	DWORD error = ok ? ERROR_SUCCESS : GetLastError();
+	CloseHandle(hProc);
+
+	if (!ok) {
+		LOG_CTRL_ETW(L"TerminateProcess failed for pid=%u error=0x%x\n", pid, error);
+		MessageBoxW(L"Failed to terminate selected process.", L"Terminate", MB_OK | MB_ICONERROR);
+		return;
+	}
+
+	LOG_CTRL_ETW(L"TerminateProcess succeeded for pid=%u\n", pid);
+	::PostMessage(app.GetHwnd(), WM_APP_UPDATE_PROCESS, (WPARAM)pid, (LPARAM)UPDATE_SOURCE_NOTIFY);
 }
 
 void CUMControllerDlg::OnSetInstantHook()
