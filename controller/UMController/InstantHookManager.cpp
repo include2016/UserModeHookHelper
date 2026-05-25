@@ -399,7 +399,7 @@ void InstantHookManager::ListenerThreadImpl(ListenerContext* ctx) {
 		_wfopen_s(&hookEventFile, hookEventPath, L"rt");
 		if (hookEventFile) {
 			if (fscanf_s(hookEventFile, "%u", &pid) == 1) {
-				LOG_CTRL_INSHOOK(L"Hook event file: PID=%u, processHash=%llu, dllHash=%llu\n",
+				LOG_CTRL_INSHOOK(L"Hook event file: PID=%u, processHash=%016llx, dllHash=%016llx\n",
 					pid, ctx->target.processFnvHash, ctx->target.dllFnvHash);
 			}
 			fclose(hookEventFile);
