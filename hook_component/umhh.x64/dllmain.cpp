@@ -22,7 +22,7 @@ VOID CopyCharToWchar(WCHAR* dst, CHAR* src, SIZE_T len) {
 	}
 }
 VOID CopyCharToWcharForIns(WCHAR* dst, CHAR* src, SIZE_T len) {
-	for (size_t i = 0; src[i]!='\0'; i++) {
+	for (size_t i = 0; src[i] != '\0'; i++) {
 		*((CHAR*)dst + i * sizeof(WCHAR)) = src[i];
 	}
 }
@@ -199,7 +199,7 @@ static DWORD FindHookOffset(PVOID ldrLoadDllAddr) {
 #undef rip
 #endif
 	return 0;
-}
+	}
 
 // This is necessary for x86 builds because of SEH,
 // which is used by Detours.  Look at loadcfg.c file
@@ -704,7 +704,7 @@ endloop:
 
 
 NTSTATUS AgentCode(_In_ PVOID ThreadParameter) {
-	
+
 
 	UNICODE_STRING NtdllPath;
 	RtlInitUnicodeString(&NtdllPath, (PWSTR)L"ntdll.dll");
@@ -1040,14 +1040,14 @@ OnProcessAttach(
 	}
 
 
-			// LdrLoadDll delay hook - now supports both x64 and x86
-		// x64: hook before ret, get unicode string from rdi
-		// x86: hook before ret, get unicode string from first stack parameter
-		// We use capstone to locate ret instruction and search back to get enough space to write trampoline code
-		do {
-			// first check if dealy_hook.hash exist, we can reuse CheckSignalFile, only change format
+	// LdrLoadDll delay hook - now supports both x64 and x86
+// x64: hook before ret, get unicode string from rdi
+// x86: hook before ret, get unicode string from first stack parameter
+// We use capstone to locate ret instruction and search back to get enough space to write trampoline code
+	do {
+		// first check if dealy_hook.hash exist, we can reuse CheckSignalFile, only change format
 		if (CheckSignalFile((UCHAR*)ntPath, len, DELAY_HOOK_SIGNAL_FILE_FMT, TRUE)) {
-			
+
 #ifdef _WIN64
 			// x64: write place holder function to GetRdi code: mov rax, rdi; ret
 			{
@@ -1145,9 +1145,9 @@ OnProcessAttach(
 					else {
 						EtwLog(L"hook code dll path: %s\n", outPath);
 						/*
-						skip \??\ 
+						skip \??\
 						*/
-						RtlInitUnicodeString(&dllPathUsNew, outPath+4);
+						RtlInitUnicodeString(&dllPathUsNew, outPath + 4);
 					}
 				}
 
@@ -1228,7 +1228,7 @@ OnProcessAttach(
 
 		HANDLE hFile = NULL;
 		IO_STATUS_BLOCK iosb;
-	
+
 
 		// Create/open file
 		NTSTATUS status = NtCreateFile(&hFile,
@@ -1251,6 +1251,10 @@ OnProcessAttach(
 			LARGE_INTEGER bytesOut = { 0 };
 			NtWriteFile(hFile, NULL, NULL, NULL, &iosb, pidBuf, pidLen, &bytesOut, NULL);
 			NtClose(hFile);
+			EtwLog(L"umhh create green light file %s, lua engin can continue now\n", filePath);
+		}
+		else {
+			EtwLog(L"umhh failed to create green light file %s, Status=0x%x\n", filePath, status);
 		}
 	}
 
@@ -2235,8 +2239,8 @@ void __fastcall LdrLoadDll_HookHandler(PVOID rcx, PVOID rdx, PVOID r8, PVOID r9,
 				NtWaitForSingleObject(node->hHookNotifyEvent, FALSE, NULL);
 				if (node->hookMode == 1)
 					EtwLog(L"being signaled that dll=%s is hooked with lua script=%s handler=%s\n", node->targetDllName, node->script, node->handler);
-				else 
-					EtwLog(L"being signaled that dll=%s is hooked with hook code dll=%\ns", node->targetDllName, node->dllPath);
+				else
+					EtwLog(L"being signaled that dll=%s is hooked with hook code dll=%s\n", node->targetDllName, node->dllPath);
 				// Close handles and remove from list
 				CloseHandle(node->hLoadNotifyEvent);
 				CloseHandle(node->hHookNotifyEvent);
@@ -2284,9 +2288,9 @@ NTSTATUS CopyFileWithTimestampFolder(
 		OutPath,
 		OutPathCch,
 		L"\\??\\%.*s%llu\\%s",
-		(int)(dirLen),        
-		SourceFile->Buffer,   
-        sysTime.QuadPart,
+		(int)(dirLen),
+		SourceFile->Buffer,
+		sysTime.QuadPart,
 		fileName
 	);
 
@@ -2318,7 +2322,7 @@ NTSTATUS CopyFileWithTimestampFolder(
 		NULL
 	);
 
-	NTSTATUS st=NtCreateFile(
+	NTSTATUS st = NtCreateFile(
 		&hDst,
 		FILE_LIST_DIRECTORY,
 		&oaDir,
@@ -2342,7 +2346,7 @@ NTSTATUS CopyFileWithTimestampFolder(
 		nt_src_file,
 		MAX_PATH,
 		L"\\??\\%.*s",
-		(int)(SourceFile->Length/sizeof(WCHAR)),
+		(int)(SourceFile->Length / sizeof(WCHAR)),
 		SourceFile->Buffer
 	);
 
@@ -2390,7 +2394,7 @@ NTSTATUS CopyFileWithTimestampFolder(
 			NULL,
 			0);
 
-		if (!NT_SUCCESS(status)) { 
+		if (!NT_SUCCESS(status)) {
 			EtwLog(L"failed to open target file, Path=%s\n", OutPath);
 			return status;
 		}
