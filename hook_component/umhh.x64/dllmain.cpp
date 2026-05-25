@@ -1136,7 +1136,6 @@ OnProcessAttach(
 				UNICODE_STRING dllPathUsNew;
 				WCHAR outPath[MAX_PATH];
 				{
-					DbgBreakPoint();
 					NTSTATUS st = CopyFileWithTimestampFolder(&dllPathUs, outPath, MAX_PATH);
 					if (0 != st) {
 						EtwLog(L"failed to call CopyFileWithTimestampFolder, Error=0x%x\n", st);
