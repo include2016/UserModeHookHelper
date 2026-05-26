@@ -8,6 +8,7 @@ typedef int(__cdecl *umhh_vsnwprintf_fn_t)(
 	va_list args
 	);
 
+// Must be resolved by caller (dllmain.cpp resolves it in OnProcessAttach).
 extern umhh_vsnwprintf_fn_t _vsnwprintf_;
 
 static inline VOID InitNullDaclSd(SECURITY_DESCRIPTOR* sd) {
