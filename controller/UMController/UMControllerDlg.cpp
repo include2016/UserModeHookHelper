@@ -751,11 +751,7 @@ BOOL CUMControllerDlg::OnInitDialog()
 	ShowWindow(SW_NORMAL);
 
 	
-	// chekc if test signing is on
-	if (!Helper::IsTestSigningOn()) {
-		LOG_CTRL_ETW(L"please turn on test signing on: bcdedit /set testsigning on\n");
-		Helper::Fatal(L"test signing off, can NOT load driver");
-	}
+ 
 	// UMHH.BootStart driver can only locate our dll at root directory
 	Helper::CopyUmhhDllsToRoot();
 	if (!Helper::UMHH_BS_DriverCheck()) {

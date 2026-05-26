@@ -26,7 +26,6 @@ public:
 	static bool ResolveProcessNtImagePath(DWORD pid, Filter& filter, std::wstring& outNtPath);
 	static void UMHH_DriverCheck(); 
 	static bool UMHH_BS_DriverCheck();
-	static bool IsTestSigningOn();
 	// Check the dedicated OB callback driver/service (UMHH.ObCallback).
 	// Returns true if the service is running (or was started successfully).
 	static bool UMHH_ObCallback_DriverCheck();
