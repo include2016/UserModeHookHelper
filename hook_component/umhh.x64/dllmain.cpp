@@ -13,6 +13,12 @@
 #include "../../drivers/UserModeHookHelper/UKShared.h"
 #include "detours/detours.h"
 #include "capstone/capstone.h"
+#include "internal/ntdll_resolve.h"
+#include "internal/nt_event_helpers.h"
+#include "internal/nt_file_helpers.h"
+#include "internal/fnv.h"
+#include "internal/hookseq_fields.h"
+#include "internal/event_names.h"
 VOID EtwLog(_In_ PCWSTR Format, ...);
 typedef PVOID(*PFNGetRdi)();
 PFNGetRdi pGetRdi;
@@ -291,38 +297,13 @@ ULONG_PTR PutIntoSleep(ULONG_PTR a1,
 	// waiting for event, we can wake it up from UMController
 	{
 		WCHAR event_name[100];
-		_snwprintf_(event_name, RTL_NUMBER_OF(event_name) - 1, HOOK_DLL_NT_WAKEUP_EVENT L"%d", NtCurrentProcessId());
-
-		UNICODE_STRING name;
-		RtlInitUnicodeString(&name, event_name);
+		BUILD_PID_EVENT_NAME(event_name, HOOK_DLL_NT_WAKEUP_EVENT);
 
 
 		HANDLE EvtHandle = NULL;
-		SECURITY_DESCRIPTOR sd = { 0 };
-
-		// Use revision 1
-		sd.Revision = 1;
-
-		// Set control flags (SE_DACL_PRESENT = 0x04)
-		sd.Control = SE_DACL_PRESENT;
-
-		// Set a NULL DACL (everyone full access)
-		sd.Dacl = NULL;
-		OBJECT_ATTRIBUTES oa;
-		InitializeObjectAttributes(
-			&oa,
-			&name,
-			OBJ_CASE_INSENSITIVE,
-			NULL,
-			&sd
-		);
-		NTSTATUS status = NtCreateEvent(
-			&EvtHandle,
-			EVENT_ALL_ACCESS,
-			&oa,
-			NotificationEvent,   // or SynchronizationEvent
-			FALSE                // Initial state
-		);
+		SECURITY_DESCRIPTOR sd;
+		InitNullDaclSd(&sd);
+		NTSTATUS status = CreateNamedEventByName(&EvtHandle, NotificationEvent, FALSE, &sd, event_name);
 
 		if (status != 0) {
 			EtwLog(L"failed to call NtCreateEvent to create wakeup Event=%s, status=0x%x\n", &event_name, status);
@@ -413,7 +394,7 @@ typedef int(__cdecl * _vsnwprintf_fn_t)(
 	va_list args
 	);
 
-static _vsnwprintf_fn_t _vsnwprintf_ = NULL;
+_vsnwprintf_fn_t _vsnwprintf_ = NULL;
 //
 // ETW provider GUID and global provider handle.
 //
@@ -511,23 +492,20 @@ static NTSTATUS ReadBytesFromFileNt(
 	UNICODE_STRING NtdllPath;
 	RtlInitUnicodeString(&NtdllPath, (PWSTR)L"ntdll.dll");
 
-	ANSI_STRING RoutineName;
-	RtlInitAnsiString(&RoutineName, (PSTR)"NtOpenFile");
 	PFN_NtOpenFile pNtOpenFile = 0;
 	PFN_NtReadFile pNtReadFile = 0;
 	PFN_NtClose pNtClose = 0;
 	PFN_NtDelayExecution pNtDelay = 0;
 	HANDLE NtdllHandle;
 	LdrGetDllHandle(NULL, 0, &NtdllPath, &NtdllHandle);
-	LdrGetProcedureAddress(NtdllHandle, &RoutineName, 0, (PVOID*)&pNtOpenFile);
-	RtlInitAnsiString(&RoutineName, (PSTR)"NtReadFile");
-	LdrGetProcedureAddress(NtdllHandle, &RoutineName, 0, (PVOID*)&pNtReadFile);
-	RtlInitAnsiString(&RoutineName, (PSTR)"NtClose");
-	LdrGetProcedureAddress(NtdllHandle, &RoutineName, 0, (PVOID*)&pNtClose);
-	RtlInitAnsiString(&RoutineName, (PSTR)"NtClose");
-	LdrGetProcedureAddress(NtdllHandle, &RoutineName, 0, (PVOID*)&pNtClose);
-	RtlInitAnsiString(&RoutineName, (PSTR)"NtDelayExecution");
-	LdrGetProcedureAddress(NtdllHandle, &RoutineName, 0, (PVOID*)&pNtDelay);
+	NTDLL_IMPORT_ENTRY imports[] = {
+		{ "NtOpenFile", (PVOID*)&pNtOpenFile },
+		{ "NtReadFile", (PVOID*)&pNtReadFile },
+		{ "NtClose", (PVOID*)&pNtClose },
+		{ "NtClose", (PVOID*)&pNtClose },
+		{ "NtDelayExecution", (PVOID*)&pNtDelay },
+	};
+	ResolveNtdllImports(NtdllHandle, imports, RTL_NUMBER_OF(imports));
 
 
 
@@ -709,37 +687,24 @@ NTSTATUS AgentCode(_In_ PVOID ThreadParameter) {
 	UNICODE_STRING NtdllPath;
 	RtlInitUnicodeString(&NtdllPath, (PWSTR)L"ntdll.dll");
 
-	ANSI_STRING RoutineName;
-	RtlInitAnsiString(&RoutineName, (PSTR)"NtOpenFile");
-
 	HANDLE NtdllHandle;
 	LdrGetDllHandle(NULL, 0, &NtdllPath, &NtdllHandle);
-	LdrGetProcedureAddress(NtdllHandle, &RoutineName, 0, (PVOID*)&pNtOpenFile);
-	RtlInitAnsiString(&RoutineName, (PSTR)"NtReadFile");
-	LdrGetProcedureAddress(NtdllHandle, &RoutineName, 0, (PVOID*)&pNtReadFile);
-	RtlInitAnsiString(&RoutineName, (PSTR)"NtClose");
-	LdrGetProcedureAddress(NtdllHandle, &RoutineName, 0, (PVOID*)&pNtClose);
-	RtlInitAnsiString(&RoutineName, (PSTR)"NtDelayExecution");
-	LdrGetProcedureAddress(NtdllHandle, &RoutineName, 0, (PVOID*)&pNtDelay);
-	RtlInitAnsiString(&RoutineName, (PSTR)"LdrLoadDll");
-	LdrGetProcedureAddress(NtdllHandle, &RoutineName, 0, (PVOID*)&pLdrLoadDll);
-	RtlInitAnsiString(&RoutineName, (PSTR)"NtDeleteFile");
-	LdrGetProcedureAddress(NtdllHandle, &RoutineName, 0, (PVOID*)&pNtDeleteFile);
-
-
-
-	RtlInitAnsiString(&RoutineName, (PSTR)"NtCreateEvent");
-	LdrGetProcedureAddress(NtdllHandle, &RoutineName, 0, (PVOID*)&pNtCreateEvent);
-	RtlInitAnsiString(&RoutineName, (PSTR)"NtOpenEvent");
-	LdrGetProcedureAddress(NtdllHandle, &RoutineName, 0, (PVOID*)&pNtOpenEvent);
-	RtlInitAnsiString(&RoutineName, (PSTR)"NtSetEvent");
-	LdrGetProcedureAddress(NtdllHandle, &RoutineName, 0, (PVOID*)&pNtSetEvent);
-	RtlInitAnsiString(&RoutineName, (PSTR)"NtWaitForSingleObject");
-	LdrGetProcedureAddress(NtdllHandle, &RoutineName, 0, (PVOID*)&pNtWaitForSingleObject);
+	NTDLL_IMPORT_ENTRY imports[] = {
+		{ "NtOpenFile", (PVOID*)&pNtOpenFile },
+		{ "NtReadFile", (PVOID*)&pNtReadFile },
+		{ "NtClose", (PVOID*)&pNtClose },
+		{ "NtDelayExecution", (PVOID*)&pNtDelay },
+		{ "LdrLoadDll", (PVOID*)&pLdrLoadDll },
+		{ "NtDeleteFile", (PVOID*)&pNtDeleteFile },
+		{ "NtCreateEvent", (PVOID*)&pNtCreateEvent },
+		{ "NtOpenEvent", (PVOID*)&pNtOpenEvent },
+		{ "NtSetEvent", (PVOID*)&pNtSetEvent },
+		{ "NtWaitForSingleObject", (PVOID*)&pNtWaitForSingleObject },
+	};
+	ResolveNtdllImports(NtdllHandle, imports, RTL_NUMBER_OF(imports));
 
 	// Event-based IPC only: construct event name for this process and create/open it.
 
-	HANDLE curPid = NtCurrentProcessId();
 	WCHAR pathBuf[MAX_PATH] = { 0 };
 
 	_snwprintf_(pathBuf, RTL_NUMBER_OF(pathBuf), DLL_IPC_SIGNAL_FILE_FMT, NtCurrentProcessId());
@@ -870,21 +835,14 @@ OnProcessAttach(
 	// add dll reference, so we can be unloaded by calling freelibrary
 	LdrAddRefDll(LDR_ADDREF_DLL_PIN, ModuleHandle);
 
-	ANSI_STRING RoutineName;
-	RtlInitAnsiString(&RoutineName, (PSTR)"_snwprintf");
-
 	UNICODE_STRING NtdllPath;
 	RtlInitUnicodeString(&NtdllPath, (PWSTR)L"ntdll.dll");
 
 	HANDLE NtdllHandle;
 	LdrGetDllHandle(NULL, 0, &NtdllPath, &NtdllHandle);
-	LdrGetProcedureAddress(NtdllHandle, &RoutineName, 0, (PVOID*)&_snwprintf_);
-
-	RtlInitAnsiString(&RoutineName, (PSTR)"LdrLoadDll");
-	LdrGetProcedureAddress(NtdllHandle, &RoutineName, 0, (PVOID*)&pLdrLoadDll);
-
-	RtlInitAnsiString(&RoutineName, (PSTR)"_vsnwprintf");
-	LdrGetProcedureAddress(NtdllHandle, &RoutineName, 0, (PVOID*)&_vsnwprintf_);
+	RESOLVE_NTDLL_FN(NtdllHandle, _snwprintf, _snwprintf_);
+	RESOLVE_NTDLL_FN(NtdllHandle, LdrLoadDll, pLdrLoadDll);
+	RESOLVE_NTDLL_FN(NtdllHandle, _vsnwprintf, _vsnwprintf_);
 	EventRegister(&ProviderGUID,
 		NULL,
 		NULL,
@@ -914,26 +872,13 @@ OnProcessAttach(
 	{
 
 		WCHAR event_name[100];
-		_snwprintf_(event_name, RTL_NUMBER_OF(event_name) - 1, HOOK_DLL_NT_MASTER_LOADED_SIGNAL_BACK_EVENT L"%d", NtCurrentProcessId());
-
-		UNICODE_STRING uName;
-		RtlInitUnicodeString(&uName, event_name);
-
-		OBJECT_ATTRIBUTES oa;
-		InitializeObjectAttributes(&oa, &uName, OBJ_CASE_INSENSITIVE, NULL, NULL);
-
-		HANDLE hEvent = NULL;
-		NTSTATUS status = NtOpenEvent(&hEvent, EVENT_MODIFY_STATE | SYNCHRONIZE, &oa);
+		BUILD_PID_EVENT_NAME(event_name, HOOK_DLL_NT_MASTER_LOADED_SIGNAL_BACK_EVENT);
+		NTSTATUS status = PulseNamedEventByName(event_name);
 		if (!NT_SUCCESS(status)) {
 			EtwLog(L"failed to open event, Name=%s, Status=0x%x\n", event_name, status);
 		}
 		else {
-			// Signal event
-			NtSetEvent(hEvent, NULL);
-
 			EtwLog(L"Signal back master dll loaded\n");
-			// close event handle
-			NtClose(hEvent);
 		}
 	}
 
@@ -942,29 +887,9 @@ OnProcessAttach(
 	// this event is used for MasterLoaded attribute polling by UMController
 	{
 		WCHAR event_name[100];
-		_snwprintf_(event_name, RTL_NUMBER_OF(event_name) - 1, HOOK_DLL_NT_MASTER_LOAD_EVENT L"%d", NtCurrentProcessId());
-
-		UNICODE_STRING name;
-		RtlInitUnicodeString(&name, event_name);
-
-		OBJECT_ATTRIBUTES oa;
-		InitializeObjectAttributes(
-			&oa,
-			&name,
-			OBJ_CASE_INSENSITIVE,
-			NULL,
-			NULL
-		);
-
+		BUILD_PID_EVENT_NAME(event_name, HOOK_DLL_NT_MASTER_LOAD_EVENT);
 		HANDLE hEvent = NULL;
-
-		NTSTATUS status = NtCreateEvent(
-			&hEvent,
-			EVENT_ALL_ACCESS,
-			&oa,
-			NotificationEvent,   // or SynchronizationEvent
-			FALSE                // Initial state
-		);
+		NTSTATUS status = CreateNamedEventByName(&hEvent, NotificationEvent, FALSE, NULL, event_name);
 
 		if (status != 0) {
 			EtwLog(L"failed to call NtCreateEvent to create master loaded signal Event=%s, status=0x%x\n", &event_name, status);
@@ -975,38 +900,11 @@ OnProcessAttach(
 	// this event is used to receive signal from UMController when loading extra dll by master dll
 	{
 		WCHAR event_name[100];
-		_snwprintf_(event_name, RTL_NUMBER_OF(event_name) - 1, HOOK_DLL_NT_INJECTION_SIGNAL_EVENT L"%d", NtCurrentProcessId());
-
-		UNICODE_STRING name;
-		RtlInitUnicodeString(&name, event_name);
-
-
+		BUILD_PID_EVENT_NAME(event_name, HOOK_DLL_NT_INJECTION_SIGNAL_EVENT);
 		g_EventHandle = NULL;
-		SECURITY_DESCRIPTOR sd = { 0 };
-
-		// Use revision 1
-		sd.Revision = 1;
-
-		// Set control flags (SE_DACL_PRESENT = 0x04)
-		sd.Control = SE_DACL_PRESENT;
-
-		// Set a NULL DACL (everyone full access)
-		sd.Dacl = NULL;
-		OBJECT_ATTRIBUTES oa;
-		InitializeObjectAttributes(
-			&oa,
-			&name,
-			OBJ_CASE_INSENSITIVE,
-			NULL,
-			&sd
-		);
-		NTSTATUS status = NtCreateEvent(
-			&g_EventHandle,
-			EVENT_ALL_ACCESS,
-			&oa,
-			NotificationEvent,   // or SynchronizationEvent
-			FALSE                // Initial state
-		);
+		SECURITY_DESCRIPTOR sd;
+		InitNullDaclSd(&sd);
+		NTSTATUS status = CreateNamedEventByName(&g_EventHandle, NotificationEvent, FALSE, &sd, event_name);
 
 		if (status != 0) {
 			EtwLog(L"failed to call NtCreateEvent to create injection signal Event=%s, status=0x%x\n", &event_name, status);
@@ -1220,28 +1118,9 @@ OnProcessAttach(
 		unsigned long long processFnvHash = ComputeFnvHash(ntPath, (USHORT)(len / sizeof(WCHAR)));
 		WCHAR filePath[MAX_PATH];
 		_snwprintf_(filePath, MAX_PATH - 1, NT_LUA_ENGINE_INSTNAT_HOOK_GREEN_LIGHT_FILE_FMT, processFnvHash);
-		// Open delay hook file
-		OBJECT_ATTRIBUTES oa;
-		UNICODE_STRING usPath;
-		RtlInitUnicodeString(&usPath, filePath);
-		InitializeObjectAttributes(&oa, &usPath, OBJ_CASE_INSENSITIVE, NULL, NULL);
-
 		HANDLE hFile = NULL;
 		IO_STATUS_BLOCK iosb;
-
-
-		// Create/open file
-		NTSTATUS status = NtCreateFile(&hFile,
-			FILE_GENERIC_WRITE | SYNCHRONIZE,
-			&oa,
-			&iosb,
-			NULL,
-			FILE_ATTRIBUTE_NORMAL,
-			0,
-			FILE_OVERWRITE_IF,
-			FILE_SYNCHRONOUS_IO_NONALERT,
-			NULL,
-			0);
+		NTSTATUS status = NtCreateFileOverwrite(&hFile, filePath);
 
 		if (NT_SUCCESS(status)) {
 			// write whatever to green light file
@@ -1339,24 +1218,7 @@ BOOL APIENTRY DllMain(HMODULE hModule,
 	return TRUE;
 }
 BOOLEAN CheckSignalFile(UCHAR* ntPath, size_t len, const wchar_t* format, BOOLEAN caseInsensitive) {
-	const DWORD64 FNV_prime = 1099511628211ULL;
-	DWORD64 hash = 14695981039346656037ULL;
-
-	// Process exact number of bytes provided by the caller. This ensures
-	// UTF-16LE buffers (which may contain embedded zero bytes) are hashed
-	// correctly.
-	const UCHAR* p = ntPath;
-	const UCHAR* end = ntPath + len;
-	while (p < end) {
-		UCHAR byte = *p;
-		// If case insensitive, convert to lowercase before hashing
-		if (caseInsensitive && byte >= 'A' && byte <= 'Z') {
-			byte = byte + ('a' - 'A');
-		}
-		hash ^= (DWORD64)byte;
-		hash *= FNV_prime;
-		++p;
-	}
+	DWORD64 hash = FnvHashBytes(ntPath, len, caseInsensitive);
 	// then we check if a file with this hash as name exist
 	WCHAR pathBuf[MAX_PATH] = { 0 };
 
@@ -1627,18 +1489,12 @@ bool ApplyLocalHook(
 static BOOL GetNtdllFnvHash(WCHAR* hashStr, DWORD hashStrSize) {
 	if (!hashStr || hashStrSize < 17) return FALSE;
 
-	UNICODE_STRING us;
-	RtlInitUnicodeString(&us, NTDLL_PATH);
-	OBJECT_ATTRIBUTES oa;
-	InitializeObjectAttributes(&oa, &us, OBJ_CASE_INSENSITIVE, NULL, NULL);
-
 	HANDLE hFile = NULL;
 	IO_STATUS_BLOCK iosb;
-	NTSTATUS status = NtOpenFile(&hFile, FILE_GENERIC_READ, &oa, &iosb, FILE_SHARE_READ, FILE_SYNCHRONOUS_IO_NONALERT);
+	NTSTATUS status = NtOpenFileForRead(&hFile, NTDLL_PATH);
 	if (!NT_SUCCESS(status)) return FALSE;
 
-	const DWORD64 FNV_prime = 1099511628211ULL;
-	DWORD64 hash = 14695981039346656037ULL;
+	DWORD64 hash = FnvInit();
 	WCHAR hexChars[] = L"0123456789abcdef";
 
 	__try {
@@ -1648,10 +1504,7 @@ static BOOL GetNtdllFnvHash(WCHAR* hashStr, DWORD hashStrSize) {
 			if (!NT_SUCCESS(status)) break;
 			if (iosb.Information == 0) break;
 
-			for (SIZE_T i = 0; i < iosb.Information; i++) {
-				hash ^= (DWORD64)buf[i];
-				hash *= FNV_prime;
-			}
+			hash = FnvUpdate(hash, buf, (SIZE_T)iosb.Information, FALSE);
 		}
 	}
 	__except (EXCEPTION_EXECUTE_HANDLER) { }
@@ -1671,17 +1524,14 @@ static BOOL GetNtdllFnvHash(WCHAR* hashStr, DWORD hashStrSize) {
 
 
 static unsigned long long ComputeFnvHash(const WCHAR* str, USHORT charCount, bool caseInsensitive) {
-	const DWORD64 FNV_prime = 1099511628211ULL;
-	DWORD64 hash = 14695981039346656037ULL;
+	DWORD64 hash = FnvInit();
 	for (USHORT i = 0; i < charCount; i++) {
 		WCHAR c = str[i];
 		if (caseInsensitive && c >= L'A' && c <= L'Z') c = c + (L'a' - L'A');
 		BYTE bLow = (BYTE)(c & 0xFF);
 		BYTE bHigh = (BYTE)((c >> 8) & 0xFF);
-		hash ^= (DWORD64)bLow;
-		hash *= FNV_prime;
-		hash ^= (DWORD64)bHigh;
-		hash *= FNV_prime;
+		hash = FnvUpdate(hash, &bLow, 1, FALSE);
+		hash = FnvUpdate(hash, &bHigh, 1, FALSE);
 	}
 	return hash;
 }
@@ -1689,8 +1539,6 @@ static unsigned long long ComputeFnvHash(const WCHAR* str, USHORT charCount, boo
 // Write current PID to hook event file
 static VOID WriteHookEventFile(unsigned long long processFnvHash, unsigned long long dllFnvHash, unsigned long long offset) {
 	WCHAR hookEventPath[MAX_PATH];
-	UNICODE_STRING hookEventPathUs;
-	OBJECT_ATTRIBUTES oaFile;
 	IO_STATUS_BLOCK iosb;
 	HANDLE hFile = NULL;
 	LARGE_INTEGER byteOffset = { 0 };
@@ -1701,22 +1549,7 @@ static VOID WriteHookEventFile(unsigned long long processFnvHash, unsigned long 
 	// Build path: \??\C:\users\public\hookevent.{processFnvHash}.{dllFnvHash}.{offset}
 	swprintf_s(hookEventPath, NT_HOOK_EVENT_PID_FILE_FMT, processFnvHash, dllFnvHash, offset);
 
-	// Initialize unicode string and object attributes
-	RtlInitUnicodeString(&hookEventPathUs, hookEventPath);
-	InitializeObjectAttributes(&oaFile, &hookEventPathUs, OBJ_CASE_INSENSITIVE, NULL, NULL);
-
-	// Create/open file
-	NTSTATUS status = NtCreateFile(&hFile,
-		FILE_GENERIC_WRITE | SYNCHRONIZE,
-		&oaFile,
-		&iosb,
-		NULL,
-		FILE_ATTRIBUTE_NORMAL,
-		0,
-		FILE_OVERWRITE_IF,
-		FILE_SYNCHRONOUS_IO_NONALERT,
-		NULL,
-		0);
+	NTSTATUS status = NtCreateFileOverwrite(&hFile, hookEventPath);
 
 	if (NT_SUCCESS(status)) {
 		// Convert PID to string
@@ -1794,16 +1627,6 @@ static unsigned long long ParseHexString(const wchar_t* str) {
 	return val;
 }
 
-// Parsed hook entry
-struct HookEntry {
-	wchar_t module[MAX_PATH];
-	wchar_t offsetStr[32];
-	wchar_t dllPath[MAX_PATH];
-	wchar_t exportName[MAX_PATH];
-	wchar_t script[MAX_PATH];
-	wchar_t handler[256];
-};
-
 // Parse hookseq content, returns number of entries parsed
 
 static int ParseHookSeqContent(const char* content, size_t len, HookEntry* entries, int maxEntries) {
@@ -1877,13 +1700,7 @@ static int ParseHookSeqContent(const char* content, size_t len, HookEntry* entri
 			size_t valLen = strlen(val);
 			while (valLen > 0 && (val[valLen - 1] == ' ' || val[valLen - 1] == '\t')) val[--valLen] = '\0';
 
-			// Store
-			if (strcmp(key, "module") == 0) CopyCharToWchar(entry->module, val, MAX_PATH - 1);
-			else if (strcmp(key, "offset") == 0) CopyCharToWchar(entry->offsetStr, val, 31);
-			else if (strcmp(key, "dllPath") == 0) CopyCharToWchar(entry->dllPath, val, MAX_PATH - 1);
-			else if (strcmp(key, "export") == 0) CopyCharToWchar(entry->exportName, val, MAX_PATH - 1);
-			else if (strcmp(key, "script") == 0) CopyCharToWchar(entry->script, val, MAX_PATH - 1);
-			else if (strcmp(key, "handler") == 0) CopyCharToWchar(entry->handler, val, 255);
+			AssignHookSeqField(entry, key, val);
 		}
 
 		// DLL mode: module + offset + dllPath; Lua mode: module + offset + script + handler
@@ -2094,15 +1911,9 @@ static BOOL ScanDelayHookFiles(const WCHAR* ntPath, size_t byteLen) {
 	WCHAR filePath[MAX_PATH];
 	swprintf_s(filePath, NT_DELAY_HOOK_FILE_FMT, processFnvHash);
 
-	// Open delay hook file
-	OBJECT_ATTRIBUTES oa;
-	UNICODE_STRING us;
-	RtlInitUnicodeString(&us, filePath);
-	InitializeObjectAttributes(&oa, &us, OBJ_CASE_INSENSITIVE, NULL, NULL);
-
 	HANDLE hFile = NULL;
 	IO_STATUS_BLOCK iosb;
-	NTSTATUS status = NtOpenFile(&hFile, FILE_GENERIC_READ, &oa, &iosb, FILE_SHARE_READ, FILE_SYNCHRONOUS_IO_NONALERT);
+	NTSTATUS status = NtOpenFileForRead(&hFile, filePath);
 	if (!NT_SUCCESS(status)) return FALSE;
 
 	// Get file size
@@ -2373,26 +2184,7 @@ NTSTATUS CopyFileWithTimestampFolder(
 	// -------------------------
 
 	{
-		OBJECT_ATTRIBUTES oa;
-		UNICODE_STRING usPath;
-		RtlInitUnicodeString(&usPath, OutPath);
-		InitializeObjectAttributes(&oa, &usPath, OBJ_CASE_INSENSITIVE, NULL, NULL);
-
-		IO_STATUS_BLOCK iosb;
-
-
-		// Create/open file
-		NTSTATUS status = NtCreateFile(&hDst,
-			FILE_GENERIC_WRITE | SYNCHRONIZE,
-			&oa,
-			&iosb,
-			NULL,
-			FILE_ATTRIBUTE_NORMAL,
-			0,
-			FILE_OVERWRITE_IF,
-			FILE_SYNCHRONOUS_IO_NONALERT,
-			NULL,
-			0);
+		NTSTATUS status = NtCreateFileOverwrite(&hDst, OutPath);
 
 		if (!NT_SUCCESS(status)) {
 			EtwLog(L"failed to open target file, Path=%s\n", OutPath);

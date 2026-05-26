@@ -179,6 +179,14 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClInclude Include="internal\event_names.h" />
+    <ClInclude Include="internal\fnv.h" />
+    <ClInclude Include="internal\hookseq_fields.h" />
+    <ClInclude Include="internal\nt_event_helpers.h" />
+    <ClInclude Include="internal\nt_file_helpers.h" />
+    <ClInclude Include="internal\ntdll_resolve.h" />
+  </ItemGroup>
+  <ItemGroup>
     <ClCompile Include="dllmain.cpp" />
     <ResourceCompile Include="umhh.rc" />
   </ItemGroup>
