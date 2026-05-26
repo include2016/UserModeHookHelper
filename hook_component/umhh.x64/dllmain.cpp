@@ -386,15 +386,7 @@ BOOLEAN CheckSignalFile(UCHAR* ntPath, size_t len, const wchar_t* format, BOOLEA
 // load them dynamically.
 //
 
-// vsnwprintf signature and function pointer (we'll resolve at runtime)
-typedef int(__cdecl * _vsnwprintf_fn_t)(
-	wchar_t *buffer,
-	size_t count,
-	const wchar_t *format,
-	va_list args
-	);
-
-_vsnwprintf_fn_t _vsnwprintf_ = NULL;
+umhh_vsnwprintf_fn_t _vsnwprintf_ = NULL;
 //
 // ETW provider GUID and global provider handle.
 //
@@ -501,7 +493,6 @@ static NTSTATUS ReadBytesFromFileNt(
 	NTDLL_IMPORT_ENTRY imports[] = {
 		{ "NtOpenFile", (PVOID*)&pNtOpenFile },
 		{ "NtReadFile", (PVOID*)&pNtReadFile },
-		{ "NtClose", (PVOID*)&pNtClose },
 		{ "NtClose", (PVOID*)&pNtClose },
 		{ "NtDelayExecution", (PVOID*)&pNtDelay },
 	};

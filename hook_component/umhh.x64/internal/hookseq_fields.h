@@ -11,7 +11,7 @@ typedef struct HookEntry {
 	wchar_t handler[256];
 } HookEntry;
 
-VOID CopyCharToWchar(WCHAR* dst, CHAR* src, SIZE_T len);
+extern VOID CopyCharToWchar(WCHAR* dst, CHAR* src, SIZE_T len);
 
 typedef struct {
 	const char* key;
