@@ -83,6 +83,8 @@ public:
 	afx_msg void OnTerminateProcess();
 	// Set Instant Hook handler
 	afx_msg void OnSetInstantHook();
+	// Reload Instant Hook handler - re-applies the currently configured .hookseq file
+	afx_msg void OnReloadInstantHook();
 	// Removed obsolete OnTimer; enumeration-only mode no longer uses it.
 	afx_msg void OnToggleGlobalHookMode();
 	afx_msg LRESULT OnApplyGlobalHookMenu(WPARAM wParam, LPARAM lParam);
