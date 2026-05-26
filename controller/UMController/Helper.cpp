@@ -29,6 +29,7 @@
 // Simple process-wide fatal handler. Stored as an atomic pointer so it can be
 // safely set from any thread during startup.
 static std::atomic<Helper::FatalHandlerType> g_fatalHandler(nullptr);
+static std::atomic_bool g_fatalDispatched(false);
 
 // Initialize reusable buffer state
 std::unique_ptr<TCHAR[]> Helper::m_sharedBuf = nullptr;
@@ -97,7 +98,16 @@ static ULONG ExtractSyscallNumberFromBytes(const unsigned char buf[16]) {
 }
 
 void Helper::Fatal(const wchar_t* message) {
-	// If a handler is registered, call it. Otherwise, log and return.
+	bool expected = false;
+	if (!g_fatalDispatched.compare_exchange_strong(
+		expected,
+		true,
+		std::memory_order_acq_rel,
+		std::memory_order_acquire)) {
+		return;
+	}
+
+	// If a handler is registered, call it once. Otherwise, log and exit.
 	auto handler = g_fatalHandler.load(std::memory_order_acquire);
 	if (handler) {
 		// Call the handler — it should be fast and thread-safe (e.g., post a
@@ -473,6 +483,56 @@ bool Helper::UMHH_BS_DriverCheck() {
 	LOG_CTRL_ETW(L"UMHH_BS_DriverCheck: created boot-start kernel driver %s\n", svcName);
 	return true;
 }
+
+bool Helper::IsTestSigningOn() {
+	struct SYSTEM_CODEINTEGRITY_INFORMATION_LOCAL {
+		ULONG Length;
+		ULONG CodeIntegrityOptions;
+	};
+
+	typedef LONG(NTAPI* NtQuerySystemInformationFunc)(
+		ULONG SystemInformationClass,
+		PVOID SystemInformation,
+		ULONG SystemInformationLength,
+		PULONG ReturnLength
+		);
+
+	const ULONG SystemCodeIntegrityInformation = 103;
+	const ULONG CodeIntegrityOptionTestSign = 0x00000002;
+
+	HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+	if (!ntdll) {
+		LOG_CTRL_ETW(L"IsTestSigningOn: GetModuleHandleW(ntdll.dll) failed: %lu\n", GetLastError());
+		return false;
+	}
+
+	NtQuerySystemInformationFunc NtQuerySystemInformation =
+		reinterpret_cast<NtQuerySystemInformationFunc>(GetProcAddress(ntdll, "NtQuerySystemInformation"));
+	if (!NtQuerySystemInformation) {
+		LOG_CTRL_ETW(L"IsTestSigningOn: NtQuerySystemInformation not found: %lu\n", GetLastError());
+		return false;
+	}
+
+	SYSTEM_CODEINTEGRITY_INFORMATION_LOCAL codeIntegrityInfo = { 0 };
+	codeIntegrityInfo.Length = sizeof(codeIntegrityInfo);
+
+	LONG status = NtQuerySystemInformation(
+		SystemCodeIntegrityInformation,
+		&codeIntegrityInfo,
+		sizeof(codeIntegrityInfo),
+		NULL);
+	if (status < 0) {
+		LOG_CTRL_ETW(L"IsTestSigningOn: NtQuerySystemInformation(SystemCodeIntegrityInformation) failed: 0x%08x\n", status);
+		return false;
+	}
+
+	bool testSigningOn = (codeIntegrityInfo.CodeIntegrityOptions & CodeIntegrityOptionTestSign) != 0;
+	LOG_CTRL_ETW(L"IsTestSigningOn: CodeIntegrityOptions=0x%08x, TestSigning=%d\n",
+		codeIntegrityInfo.CodeIntegrityOptions,
+		testSigningOn ? 1 : 0);
+	return testSigningOn;
+}
+
 void Helper::UMHH_DriverCheck() {
 	// Ensure the configured driver/service exists and is set to auto-start.
 	SC_HANDLE scm = OpenSCManagerW(NULL, NULL, SC_MANAGER_CONNECT);

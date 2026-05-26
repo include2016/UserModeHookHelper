@@ -65,9 +65,11 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "kmhh.trampoline.sys", "hook
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "VbsObjectCheck", "hook_code_examples\private_hook_code\VbsObjectCheck\VbsObjectCheck.vcxproj", "{4AF5EA86-8183-4734-BC3B-A8F8C0C2BF4E}"
 EndProject
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "LuaEngine", "hook_component\LuaEngine\LuaEngine.vcxproj", "{89B550BF-9CE0-4911-BD24-8A367E1FCBF2}"
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "umhh.luaengine.dll", "hook_component\LuaEngine\LuaEngine.vcxproj", "{89B550BF-9CE0-4911-BD24-8A367E1FCBF2}"
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "DriverHookCodeTemplate", "hook_component\DriverHookCodeTemplate\DriverHookCodeTemplate.vcxproj", "{241F09B4-FFF7-43C6-A2F6-379F4375CBDC}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "KrnlMemWriter", "plugins\KrnlMemWriter\KrnlMemWriter.vcxproj", "{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -911,6 +913,34 @@ Global
 		{241F09B4-FFF7-43C6-A2F6-379F4375CBDC}.Release|x64.Build.0 = Release|x64
 		{241F09B4-FFF7-43C6-A2F6-379F4375CBDC}.Release|x86.ActiveCfg = Release|Win32
 		{241F09B4-FFF7-43C6-A2F6-379F4375CBDC}.Release|x86.Build.0 = Release|Win32
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.CustomConfig|ARM.ActiveCfg = Release|x64
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.CustomConfig|ARM.Build.0 = Release|x64
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.CustomConfig|ARM64.ActiveCfg = Release|x64
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.CustomConfig|ARM64.Build.0 = Release|x64
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.CustomConfig|x64.ActiveCfg = Release|x64
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.CustomConfig|x64.Build.0 = Release|x64
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.CustomConfig|x86.ActiveCfg = Release|Win32
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.CustomConfig|x86.Build.0 = Release|Win32
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Debug|ARM.ActiveCfg = Debug|Win32
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Debug|ARM64.ActiveCfg = Debug|Win32
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Debug|x64.ActiveCfg = Debug|x64
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Debug|x64.Build.0 = Debug|x64
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Debug|x86.ActiveCfg = Debug|Win32
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Debug|x86.Build.0 = Debug|Win32
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Out|ARM.ActiveCfg = Release|x64
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Out|ARM.Build.0 = Release|x64
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Out|ARM64.ActiveCfg = Release|x64
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Out|ARM64.Build.0 = Release|x64
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Out|x64.ActiveCfg = Release|x64
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Out|x64.Build.0 = Release|x64
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Out|x86.ActiveCfg = Release|Win32
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Out|x86.Build.0 = Release|Win32
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Release|ARM.ActiveCfg = Release|Win32
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Release|ARM64.ActiveCfg = Release|Win32
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Release|x64.ActiveCfg = Release|x64
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Release|x64.Build.0 = Release|x64
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Release|x86.ActiveCfg = Release|Win32
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Release|x86.Build.0 = Release|Win32
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -943,6 +973,7 @@ Global
 		{4AF5EA86-8183-4734-BC3B-A8F8C0C2BF4E} = {9CA70463-8447-48E3-95C3-474BDAE7590E}
 		{89B550BF-9CE0-4911-BD24-8A367E1FCBF2} = {C3C21621-BD22-41D3-A091-DAE3978C4435}
 		{241F09B4-FFF7-43C6-A2F6-379F4375CBDC} = {C3C21621-BD22-41D3-A091-DAE3978C4435}
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890} = {A0A4EE83-B1E4-4837-AA11-87ECA395A082}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {2A35B494-82D4-4B3A-BC6C-885135BC32B2}

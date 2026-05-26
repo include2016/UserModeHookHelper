@@ -175,6 +175,9 @@
     <ClCompile Include="dllmain.cpp" />
     <ClInclude Include="LuaEngine.h" />
   </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="LuaEngine.rc" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />
 </Project>

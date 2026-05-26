@@ -749,14 +749,12 @@ BOOL CUMControllerDlg::OnInitDialog()
 
 	ShowWindow(SW_NORMAL);
 
-	// Register a minimal fatal handler that posts a message to the main
-	// window so that the UI can shutdown itself on a fatal error instead
-	// of calling exit() from a library thread.
-	Helper::SetFatalHandler([](const wchar_t* msg) {
-		// Log first, then post message to the main UI thread.
-		LOG_CTRL_ETW(L"Fatal reported: %s\n", msg);
-		::PostMessage(app.GetHwnd(), WM_APP_FATAL, 0, 0);
-	});
+	
+	// chekc if test signing is on
+	if (!Helper::IsTestSigningOn()) {
+		LOG_CTRL_ETW(L"please turn on test signing on: bcdedit /set testsigning on\n");
+		Helper::Fatal(L"test signing off, can NOT load driver");
+	}
 	// UMHH.BootStart driver can only locate our dll at root directory
 	Helper::CopyUmhhDllsToRoot();
 	if (!Helper::UMHH_BS_DriverCheck()) {
@@ -765,8 +763,7 @@ BOOL CUMControllerDlg::OnInitDialog()
 	Helper::UMHH_DriverCheck();
 	if (!Helper::IsServiceRunning(SERVICE_NAME)) {
 		LOG_CTRL_ETW(L"UMHH service '%s' is not running\n", SERVICE_NAME);
-		app.GetETW().UnReg();
-		exit(-1);
+		Helper::Fatal(L"UMHH service" SERVICE_NAME L" is not running");
 	}
 	// resolve NtCreateThreadEx syscal number
 	if (!Helper::ResolveNtCreateThreadExSyscallNum(&m_NtCreateThreadExSyscallNum)) {
@@ -1136,7 +1133,6 @@ BOOL CUMControllerDlg::OnInitDialog()
 	LRESULT CUMControllerDlg::OnFatalMessage(WPARAM, LPARAM) {
 	// Graceful shutdown triggered from fatal handler.
 	LOG_CTRL_ETW(L"OnFatalMessage received, closing dialog.\n");
-	MessageBox(L"check etw log", L"Attention!", MB_ICONERROR);
 	EndDialog(IDCANCEL);
 	return 0;
 }

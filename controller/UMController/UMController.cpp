@@ -80,14 +80,19 @@ BOOL CUMControllerApp::InitInstance()
 		}
 	GetETW().Reg();
 
-
 	// Register a minimal fatal handler that posts a message to the main
 	// window so that the UI can shutdown itself on a fatal error instead
 	// of calling exit() from a library thread.
 	Helper::SetFatalHandler([](const wchar_t* msg) {
 		// Log first, then post message to the main UI thread.
-		LOG_CTRL_ETW(L"Fatal reported: %s\n", msg);
-		::PostMessage(app.GetHwnd(), WM_APP_FATAL, 0, 0);
+			MessageBoxW(app.GetHwnd(), msg, L"Fatal Error", MB_ICONERROR);
+			if (app.GetHwnd()) {
+			::PostMessage(app.GetHwnd(), WM_APP_FATAL, 0, 0);
+			}
+			else {
+				app.GetETW().UnReg();
+				exit(-1);
+			}
 	});
 	// UMHH.BootStart driver can only locate our dll at root directory
 	Helper::CopyUmhhDllsToRoot();

@@ -51,7 +51,7 @@ public:
 private:
     // Per-PID hook ID allocator: each PID gets its own 256-bit bitfield
     struct PerPidHookIdPool {
-        DWORD64 bitfield[4] = { 0 };  // 256 bits → hook IDs 0..255
+        DWORD64 bitfield[4] = { 0 };  // 256 bits hook IDs 0..255
     };
 
     std::unordered_map<DWORD, PerPidHookIdPool> m_PidHookIdPools;

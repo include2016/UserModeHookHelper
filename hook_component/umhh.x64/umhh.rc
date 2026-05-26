@@ -20,12 +20,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "GIAO"
             VALUE "FileDescription", "user mode hook helper master dll component"
-            VALUE "FileVersion", "1.0.0.0"
+            VALUE "FileVersion", "1.1.1"
             VALUE "InternalName", "umhh.dll"
-            VALUE "LegalCopyright", "(c) 2025 GIAO. All rights reserved."
+            VALUE "LegalCopyright", "(c) 2026 GIAO. All rights reserved."
             VALUE "OriginalFilename", "umhh.dll"
             VALUE "ProductName", "UserModeHookHelper"
-            VALUE "ProductVersion", "1.0.0.0"
+            VALUE "ProductVersion", "1.1.1"
         END
     END
     BLOCK "VarFileInfo"

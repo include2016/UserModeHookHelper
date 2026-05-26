@@ -512,7 +512,7 @@ void InstantHookManager::ListenerThreadImpl(ListenerContext* ctx) {
 			DWORD hookCodeOffset = 0;
 			CT2A exportNameA(ctx->target.exportName.c_str());
 			if (!m_services->CheckExportFromFile(ctx->target.dllPath.c_str(), exportNameA, &hookCodeOffset)) {
-				LOG_CTRL_INSHOOK(L"failed to get target export function=%s of target dll%s\n",
+				LOG_CTRL_INSHOOK(L"failed to get target export function=%s of target dll %s\n",
 					ctx->target.exportName.c_str(), ctx->target.dllPath.c_str());
 				SetEvent(ctx->hHookNotify);
 				continue;
