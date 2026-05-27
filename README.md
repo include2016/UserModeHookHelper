@@ -60,7 +60,7 @@ end
 
 
 
-[目前已实现的binding](https://github.com/wqreytuk/UserModeHookHelper/blob/41f7da0cf85870779f9222016351b9706aef925b/hook_component/LuaEngine/dllmain.cpp#L259)
+[目前已实现的binding](https://github.com/include2016/UserModeHookHelper/blob/41f7da0cf85870779f9222016351b9706aef925b/hook_component/LuaEngine/dllmain.cpp#L259)
 
 
 
@@ -90,7 +90,7 @@ UmhhMan.exe hookseq -o C:\users\public\driver.hookseq -add ntoskrnl.exe,60b820,C
 
 <hr>
 
-增加[KernelModeHookHelper](https://github.com/wqreytuk/UserModeHookHelper/tree/main/plugins/KrnlModeHookHlp)插件
+增加[KernelModeHookHelper](https://github.com/include2016/UserModeHookHelper/tree/main/plugins/KrnlModeHookHlp)插件
 
 ![image-20251226172110339](README.assets/image-20251226172110339.png)
 
@@ -112,9 +112,9 @@ hook地址输入方式有两种：
 
 - 在Direct Address输入框中直接输入hook地址
 
-点击Apply Hook按钮会弹出文件选择框，选择包含你自己编写的包含[hook代码逻辑的dll](https://github.com/wqreytuk/UserModeHookHelper/tree/main/hook_component/HookCodeTemplate)文件即可
+点击Apply Hook按钮会弹出文件选择框，选择包含你自己编写的包含[hook代码逻辑的dll](https://github.com/include2016/UserModeHookHelper/tree/main/hook_component/HookCodeTemplate)文件即可
 
-在[release](https://github.com/wqreytuk/UMHH_Release)中，我们附带了两个用于演示的dll：[HookCodeTemplate.x64.dll](https://github.com/wqreytuk/UMHH_Release/blob/main/HookCodeTemplate.x64.dll)和[HookCodeTemplate.Win32.dll](https://github.com/wqreytuk/UMHH_Release/blob/main/HookCodeTemplate.Win32.dll)，分别用于X64和x86进程的hook
+在[release](https://github.com/include2016/UMHH_Release)中，我们附带了两个用于演示的dll：[HookCodeTemplate.x64.dll](https://github.com/include2016/UMHH_Release/blob/main/HookCodeTemplate.x64.dll)和[HookCodeTemplate.Win32.dll](https://github.com/include2016/UMHH_Release/blob/main/HookCodeTemplate.Win32.dll)，分别用于X64和x86进程的hook
 
 hook成功后会出现在hooklist列表中
 
@@ -124,7 +124,7 @@ hook成功后会出现在hooklist列表中
 
 ![image-20251205143744424](README.assets/image-20251205143744424.png)
 
-此时我们已经hook了`Notepad.exe`进程的`Kernelbase!CreateFileW`函数，只要Notepad进行打开文件的操作，我们就能从[EtwTracer](https://github.com/wqreytuk/UMHH_Release/blob/main/EtwTracer.exe)中看到日志记录
+此时我们已经hook了`Notepad.exe`进程的`Kernelbase!CreateFileW`函数，只要Notepad进行打开文件的操作，我们就能从[EtwTracer](https://github.com/include2016/UMHH_Release/blob/main/EtwTracer.exe)中看到日志记录
 
 ![image-20251205144016600](README.assets/image-20251205144016600.png)
 
@@ -159,7 +159,7 @@ hook成功后会出现在hooklist列表中
 
 # 插件支持
 
-参考[AVProcessHandleLocater](https://github.com/wqreytuk/UserModeHookHelper/tree/main/plugins/AVProcessHandleLocater)
+参考[AVProcessHandleLocater](https://github.com/include2016/UserModeHookHelper/tree/main/plugins/AVProcessHandleLocater)
 
 该插件可以搜索当前系统中可以获取目标进程高权限句柄的进程
 
@@ -167,7 +167,7 @@ hook成功后会出现在hooklist列表中
 
 # UmhhMananager
 
-[UmhhMan](https://github.com/wqreytuk/UserModeHookHelper/tree/main/controller/UmhhManager)是一个cli工具，用于管理本工具中的驱动中的一些注册表项，主要有以下四个功能
+[UmhhMan](https://github.com/include2016/UserModeHookHelper/tree/main/controller/UmhhManager)是一个cli工具，用于管理本工具中的驱动中的一些注册表项，主要有以下四个功能
 
 - 受保护进程ProcessName管理
 - 白名单进程路径NTPath Hash管理
