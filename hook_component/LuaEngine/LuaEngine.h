@@ -64,6 +64,13 @@ typedef NTSTATUS(NTAPI* PNtQueryInformationFile)(
     HANDLE FileHandle, PIO_STATUS_BLOCK IoStatusBlock,
     PVOID FileInformation, ULONG Length,
     ULONG FileInformationClass);
+typedef NTSTATUS(NTAPI* PNtQueryVirtualMemory)(
+    HANDLE ProcessHandle, PVOID BaseAddress,
+    ULONG MemoryInformationClass, PVOID MemoryInformation,
+    ULONG MemoryInformationLength, PULONG ReturnLength);
+typedef PVOID(NTAPI* PRtlAllocateHeap)(PVOID HeapHandle, ULONG Flags, SIZE_T Size);
+typedef BOOLEAN(NTAPI* PRtlFreeHeap)(PVOID HeapHandle, ULONG Flags, PVOID Base);
+typedef VOID(NTAPI* PRtlCopyMemory)(PVOID Destination, CONST VOID* Source, SIZE_T Length);
 
 // ---- Resolved ntdll function pointers ----
 
@@ -88,6 +95,10 @@ extern PNtDelayExecution       pNtDelay;
 extern PRtlAddRefDll           pLdrAddRefDll;
 extern PNtQueryInformationProcess pNtQueryInformationProcess;
 extern PNtQueryInformationFile    pNtQueryInformationFile;
+extern PNtQueryVirtualMemory      pNtQueryVirtualMemory;
+extern PRtlAllocateHeap           pRtlAllocateHeap;
+extern PRtlFreeHeap               pRtlFreeHeap;
+extern PRtlCopyMemory             pRtlCopyMemory;
 
 // ---- ETW logging ----
 
