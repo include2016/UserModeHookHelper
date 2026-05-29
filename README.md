@@ -1,5 +1,5 @@
 
-https://github.com/user-attachments/assets/96e19001-3abf-46c9-9b2e-c2528f3c8f80
+
 ![image-20251205141938656](README.assets/image-20251205141938656.png)
 
 
@@ -26,7 +26,9 @@ shutdown /g /t 1 /f
 
 增加instant patch功能，自动patch目标代码
 
-功能演示：https://github.com/user-attachments/assets/f72b7c33-2a2e-487b-8437-fd1c97d928f9
+功能演示：
+
+https://github.com/user-attachments/assets/f72b7c33-2a2e-487b-8437-fd1c97d928f9
 
 
 
