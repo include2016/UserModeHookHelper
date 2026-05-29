@@ -1,4 +1,4 @@
-#include "pch.h"
+﻿#include "pch.h"
 #include "InstantHookManager.h"
 #include "../HookCoreLib/HookCore.h"
 #include "HookInterfaces.h"
@@ -61,6 +61,7 @@ bool InstantHookManager::AddTarget(const HookTarget& target) {
 	ListenerContext* ctx = new ListenerContext;
 	ctx->mgr = this;
 	ctx->target = target;
+	ctx->isPatchMode = (target.exportName.compare(0, 6, L"patch.") == 0);
 	ctx->hLoadNotify = NULL;
 	ctx->hHookNotify = NULL;
 	ctx->hStopEvent = NULL;
@@ -125,6 +126,52 @@ void InstantHookManager::StopAll() {
 	while (InterlockedExchange(&m_HookIdLock, 1) != 0) Sleep(1);
 	m_PidHookIdPools.clear();
 	InterlockedExchange(&m_HookIdLock, 0);
+}
+
+void InstantHookManager::StopByProcessHashAndMode(unsigned long long processFnvHash, bool isPatch) {
+	std::vector<ListenerContext*> toRemove;
+
+	for (auto* ctx : m_Listeners) {
+		if (ctx->target.processFnvHash == processFnvHash && ctx->isPatchMode == isPatch) {
+			// Signal stop
+			if (ctx->hStopEvent) {
+				SetEvent(ctx->hStopEvent);
+			}
+			ctx->running = false;
+
+			// Wait for thread to exit
+			if (ctx->hThread) {
+				WaitForSingleObject(ctx->hThread, 5000);
+				CloseHandle(ctx->hThread);
+				ctx->hThread = NULL;
+			}
+
+			// Close events
+			if (ctx->hStopEvent) {
+				CloseHandle(ctx->hStopEvent);
+				ctx->hStopEvent = NULL;
+			}
+			if (ctx->hLoadNotify) {
+				CloseHandle(ctx->hLoadNotify);
+				ctx->hLoadNotify = NULL;
+			}
+			if (ctx->hHookNotify) {
+				CloseHandle(ctx->hHookNotify);
+				ctx->hHookNotify = NULL;
+			}
+
+			toRemove.push_back(ctx);
+		}
+	}
+
+	// Remove from list
+	for (auto* ctx : toRemove) {
+		m_Listeners.erase(std::remove(m_Listeners.begin(), m_Listeners.end(), ctx), m_Listeners.end());
+		delete ctx;
+	}
+
+	// Clean up hook ID pools for dead processes after stopping listeners
+	CleanupDeadPidPools();
 }
 
 void InstantHookManager::StopByProcessHash(unsigned long long processFnvHash) {
@@ -332,11 +379,16 @@ static bool SignalLuaEngineScript(IHookServices* services, DWORD pid, int hookId
 }
 
 void InstantHookManager::ListenerThreadImpl(ListenerContext* ctx) {
-	// construct event names (only once)
+	// construct event names (only once) — use mode-tagged names to separate hook vs patch
 	WCHAR loadEventName[MAX_PATH];
 	WCHAR hookEventName[MAX_PATH];
-	swprintf_s(loadEventName, UM_LOAD_NOTIFY_EVENT_FMT, ctx->target.processFnvHash, ctx->target.dllFnvHash, ctx->target.offset);
-	swprintf_s(hookEventName, UM_HOOK_NOTIFY_EVENT_FMT, ctx->target.processFnvHash, ctx->target.dllFnvHash, ctx->target.offset);
+	if (ctx->isPatchMode) {
+		swprintf_s(loadEventName, UM_LOAD_NOTIFY_PATCH_EVENT_FMT, ctx->target.processFnvHash, ctx->target.dllFnvHash, ctx->target.offset);
+		swprintf_s(hookEventName, UM_HOOK_NOTIFY_PATCH_EVENT_FMT, ctx->target.processFnvHash, ctx->target.dllFnvHash, ctx->target.offset);
+	} else {
+		swprintf_s(loadEventName, UM_LOAD_NOTIFY_HOOK_EVENT_FMT, ctx->target.processFnvHash, ctx->target.dllFnvHash, ctx->target.offset);
+		swprintf_s(hookEventName, UM_HOOK_NOTIFY_HOOK_EVENT_FMT, ctx->target.processFnvHash, ctx->target.dllFnvHash, ctx->target.offset);
+	}
 
 	// Create/open events once at startup
 	ctx->hLoadNotify = OpenEventW(SYNCHRONIZE | EVENT_MODIFY_STATE, FALSE, loadEventName);
@@ -392,8 +444,13 @@ void InstantHookManager::ListenerThreadImpl(ListenerContext* ctx) {
 		DWORD pid = 0;
 		// Read hook event file to get PID
 		WCHAR hookEventPath[MAX_PATH];
-		swprintf_s(hookEventPath, UM_HOOK_EVENT_PID_FILE_FMT,
-			ctx->target.processFnvHash, ctx->target.dllFnvHash, ctx->target.offset);
+		if (ctx->isPatchMode) {
+			swprintf_s(hookEventPath, UM_HOOK_EVENT_PID_FILE_PATCH_FMT,
+				ctx->target.processFnvHash, ctx->target.dllFnvHash, ctx->target.offset);
+		} else {
+			swprintf_s(hookEventPath, UM_HOOK_EVENT_PID_FILE_HOOK_FMT,
+				ctx->target.processFnvHash, ctx->target.dllFnvHash, ctx->target.offset);
+		}
 
 		FILE* hookEventFile = NULL;
 		_wfopen_s(&hookEventFile, hookEventPath, L"rt");
@@ -412,10 +469,11 @@ void InstantHookManager::ListenerThreadImpl(ListenerContext* ctx) {
 		}
 
 
+		bool isPatchMode = (ctx->target.exportName.compare(0, 6, L"patch.") == 0);
 		bool isLuaMode = !ctx->target.script.empty();
 		int hook_mode = isLuaMode ? HOOK_MODE_LUA : HOOK_MODE_DLL;
 
-		// get module base (common to both modes)
+		// get module base (common to all modes)
 		DWORD64 moduleBase = 0;
 		if (!m_services->GetModuleBase(pid, ctx->target.module.c_str(), &moduleBase) || moduleBase == 0) {
 			LOG_CTRL_INSHOOK(L"failed to get target module base\n");
@@ -425,6 +483,80 @@ void InstantHookManager::ListenerThreadImpl(ListenerContext* ctx) {
 
 		// use pre-parsed offset
 		DWORD64 offset = ctx->target.offset;
+		DWORD64 targetAddress = moduleBase + offset;
+
+		// ---- Patch mode: write bytes directly, skip hook application ----
+		if (isPatchMode) {
+			std::wstring hexStr = ctx->target.exportName.substr(6);
+			std::vector<BYTE> patchBytes = HexToBytes(hexStr);
+			if (patchBytes.empty()) {
+				LOG_CTRL_INSHOOK(L"patch mode: failed to decode hex bytes from export name: %s\n", ctx->target.exportName.c_str());
+				SetEvent(ctx->hHookNotify);
+				continue;
+			}
+
+			HANDLE hProc = NULL;
+			if (!m_services->GetHighAccessProcHandle(pid, &hProc) || !hProc) {
+				LOG_CTRL_INSHOOK(L"patch mode: failed to get process handle, pid=%u\n", pid);
+				SetEvent(ctx->hHookNotify);
+				continue;
+			}
+
+			DWORD oldProtect = 0;
+			bool patchOk = false;
+			if (VirtualProtectEx(hProc, (LPVOID)targetAddress, patchBytes.size(), PAGE_EXECUTE_READWRITE, &oldProtect)) {
+				SIZE_T written = 0;
+				if (m_services->WriteProcessMemoryWrap(hProc, (LPVOID)targetAddress, patchBytes.data(), patchBytes.size(), &written)) {
+					VirtualProtectEx(hProc, (LPVOID)targetAddress, patchBytes.size(), oldProtect, &oldProtect);
+					patchOk = true;
+				}
+				else {
+					LOG_CTRL_INSHOOK(L"patch mode: WriteProcessMemory failed at 0x%llX, pid=%u\n", targetAddress, pid);
+				}
+			}
+			else {
+				LOG_CTRL_INSHOOK(L"patch mode: VirtualProtectEx failed at 0x%llX, err=%u\n", targetAddress, GetLastError());
+			}
+			CloseHandle(hProc);
+
+			if (!patchOk) {
+				SetEvent(ctx->hHookNotify);
+				continue;
+			}
+
+			LOG_CTRL_INSHOOK(L"Instant patch applied at 0x%llX, %zu bytes, pid=%u\n", targetAddress, patchBytes.size(), pid);
+
+			// Persist patch info to registry so HookUI can display it
+			FILETIME createTime = { 0 }, exitTime, kernelTime, userTime;
+			HANDLE hProcInfo = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+			if (hProcInfo) {
+				if (GetProcessTimes(hProcInfo, &createTime, &exitTime, &kernelTime, &userTime)) {
+					HookRow row;
+					row.id = -1; // patch mode doesn't use hook IDs
+					row.address = targetAddress;
+					row.module = ctx->target.module;
+					row.expFunc = L"Patch:" + hexStr;
+					row.ori_asm_code_addr = 0;
+					row.ori_asm_code_len = (unsigned long)patchBytes.size();
+					row.trampoline_pit = 0;
+
+					std::vector<HookRow> rows;
+					rows.push_back(row);
+
+					if (!m_services->SaveProcHookList(pid, createTime.dwHighDateTime, createTime.dwLowDateTime, rows)) {
+						LOG_CTRL_INSHOOK(L"patch mode: failed to persist patch info to registry for pid=%u\n", pid);
+					}
+					else {
+						LOG_CTRL_INSHOOK(L"patch info persisted to registry: pid=%u, address=0x%llx\n", pid, targetAddress);
+					}
+				}
+				CloseHandle(hProcInfo);
+			}
+
+			SetEvent(ctx->hHookNotify);
+			LOG_CTRL_INSHOOK(L"Instant patch completed for pid=%u, waiting for next instance...\n", pid);
+			continue;
+		}
 
 		DWORD64 hookFunctionAddress = 0;
 		DWORD64 luaEngineBase = 0;
@@ -536,7 +668,6 @@ void InstantHookManager::ListenerThreadImpl(ListenerContext* ctx) {
 		DWORD oriLen = 0;
 		PVOID trampoline = nullptr;
 		PVOID oriAsmAddr = nullptr;
-		DWORD64 targetAddress = moduleBase + offset;
 
 
 		// For Lua mode, signal LuaEngine to load the script before applying hook
@@ -710,4 +841,121 @@ unsigned long long InstantHookManager::ComputeFnvHash(const wchar_t* str) {
 		hash *= FNV_prime;
 	}
 	return hash;
+}
+
+std::vector<BYTE> InstantHookManager::HexToBytes(const std::wstring& hex) {
+	std::vector<BYTE> bytes;
+	std::wstring clean;
+	for (wchar_t c : hex) {
+		if ((c >= L'0' && c <= L'9') || (c >= L'a' && c <= L'f') || (c >= L'A' && c <= L'F'))
+			clean += c;
+	}
+	if (clean.size() % 2 != 0) return bytes;
+	for (size_t i = 0; i < clean.size(); i += 2) {
+		BYTE hi = 0, lo = 0;
+		wchar_t ch = clean[i];
+		if (ch >= L'0' && ch <= L'9') hi = (BYTE)(ch - L'0');
+		else if (ch >= L'a' && ch <= L'f') hi = (BYTE)(ch - L'a' + 10);
+		else if (ch >= L'A' && ch <= L'F') hi = (BYTE)(ch - L'A' + 10);
+		ch = clean[i + 1];
+		if (ch >= L'0' && ch <= L'9') lo = (BYTE)(ch - L'0');
+		else if (ch >= L'a' && ch <= L'f') lo = (BYTE)(ch - L'a' + 10);
+		else if (ch >= L'A' && ch <= L'F') lo = (BYTE)(ch - L'A' + 10);
+		bytes.push_back((BYTE)((hi << 4) | lo));
+	}
+	return bytes;
+}
+
+bool InstantHookManager::ParsePatchSeqFile(const wchar_t* filePath, std::vector<PatchEntry>& outEntries) {
+	FILE* f = NULL;
+	_wfopen_s(&f, filePath, L"rt, ccs=UNICODE");
+	if (!f) return false;
+
+	wchar_t lineBuf[MAX_PATH * 2];
+	PatchEntry entry;
+	bool inPatch = false;
+	bool hasModule = false, hasOffset = false, hasPatch = false;
+
+	while (fgetws(lineBuf, MAX_PATH * 2, f)) {
+		wchar_t* p = lineBuf;
+		while (*p == L' ' || *p == L'\t') p++;
+		size_t len = wcslen(p);
+		while (len > 0 && (p[len - 1] == L'\n' || p[len - 1] == L'\r' || p[len - 1] == L' ' || p[len - 1] == L'\t')) {
+			p[--len] = L'\0';
+		}
+
+		if (p[0] == L'[' && wcsncmp(p + 1, L"patch]", 6) == 0) {
+			if (inPatch && hasModule && hasOffset && hasPatch) {
+				outEntries.push_back(entry);
+			}
+			entry = PatchEntry();
+			inPatch = true;
+			hasModule = hasOffset = hasPatch = false;
+			continue;
+		}
+
+		if (!inPatch) continue;
+
+		wchar_t* eq = wcschr(p, L'=');
+		if (!eq) continue;
+		*eq = L'\0';
+		wchar_t* key = p;
+		wchar_t* val = eq + 1;
+		size_t keyLen = wcslen(key);
+		while (keyLen > 0 && (key[keyLen - 1] == L' ' || key[keyLen - 1] == L'\t')) keyLen--;
+		key[keyLen] = L'\0';
+		while (*val == L' ' || *val == L'\t') val++;
+
+		if (wcscmp(key, L"module") == 0) {
+			entry.module = val;
+			hasModule = true;
+		}
+		else if (wcscmp(key, L"offset") == 0) {
+			entry.offsetStr = val;
+			hasOffset = true;
+		}
+		else if (wcscmp(key, L"patch") == 0) {
+			entry.patchHex = val;
+			hasPatch = true;
+		}
+	}
+
+	{
+		if (inPatch && hasModule && hasOffset && hasPatch) {
+			outEntries.push_back(entry);
+		}
+	}
+
+	fclose(f);
+	return !outEntries.empty();
+}
+
+bool InstantHookManager::ConvertPatchSeqToHookSeq(const wchar_t* patchSeqPath, std::wstring& outHookSeqPath) {
+	std::vector<PatchEntry> entries;
+	if (!ParsePatchSeqFile(patchSeqPath, entries)) return false;
+
+	// Build output path: replace .patchseq extension with .hookseq
+	outHookSeqPath = patchSeqPath;
+	size_t dotPos = outHookSeqPath.rfind(L".patchseq");
+	if (dotPos != std::wstring::npos) {
+		outHookSeqPath.replace(dotPos, 9, L".hookseq");
+	}
+	else {
+		outHookSeqPath += L".hookseq";
+	}
+
+	FILE* fout = NULL;
+	_wfopen_s(&fout, outHookSeqPath.c_str(), L"wt, ccs=UNICODE");
+	if (!fout) return false;
+
+	for (const auto& e : entries) {
+		fwprintf_s(fout, L"[hook]\n");
+		fwprintf_s(fout, L"module=%s\n", e.module.c_str());
+		fwprintf_s(fout, L"offset=%s\n", e.offsetStr.c_str());
+		fwprintf_s(fout, L"dllPath=C:\\windows\\system32\\lsasrv.dll\n");
+		fwprintf_s(fout, L"export=patch.%s\n\n", e.patchHex.c_str());
+	}
+
+	fclose(fout);
+	return true;
 }

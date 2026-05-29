@@ -44,6 +44,10 @@
 #define ID_MENU_SET_INSTANT_HOOK       40036
 // Reload Instant Hook Sequence context menu (re-applies the same .hookseq file)
 #define ID_MENU_RELOAD_INSTANT_HOOK    40038
+// Set Instant Patch context menu
+#define ID_MENU_SET_INSTANT_PATCH      40039
+// Reload Instant Patch Sequence context menu
+#define ID_MENU_RELOAD_INSTANT_PATCH   40040
 #define ID_TOOLS_ADD_WHITELIST         40031
 #define ID_TOOLS_REMOVE_WHITELIST      40032
 // Plugin menu base (reserve a small range for plugin items)

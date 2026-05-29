@@ -1,4 +1,4 @@
-
+﻿
 // UMControllerDlg.h : header file
 //
 
@@ -86,6 +86,10 @@ public:
 	// Reload Instant Hook handler - re-applies the currently configured .hookseq file
 	afx_msg void OnReloadInstantHook();
 	// Removed obsolete OnTimer; enumeration-only mode no longer uses it.
+	// Set Instant Patch handler
+	afx_msg void OnSetInstantPatch();
+	// Reload Instant Patch handler - re-applies the currently configured .patchseq file
+	afx_msg void OnReloadInstantPatch();
 	afx_msg void OnToggleGlobalHookMode();
 	afx_msg LRESULT OnApplyGlobalHookMenu(WPARAM wParam, LPARAM lParam);
 

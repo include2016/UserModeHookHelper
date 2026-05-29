@@ -52,6 +52,17 @@ NTSTATUS CopyFileWithTimestampFolder(
 	WCHAR* OutPath,
 	ULONG OutPathCch
 );
+// Hook mode for InstantHookTarget — use enum instead of magic numbers
+// Undef the SharedMacroDef.h macros first to avoid name collision
+#undef HOOK_MODE_DLL
+#undef HOOK_MODE_LUA
+#undef HOOK_MODE_PATCH
+enum HookMode {
+	HOOK_MODE_DLL   = 0,  // hook_code_addr points to DLL export function
+	HOOK_MODE_LUA   = 1,  // hook_code_addr points to LuaEngine dispatch
+	HOOK_MODE_PATCH = 2,  // direct byte patch (no hook trampoline)
+};
+
 // InstantHook target list (for delay hook feature)
 struct InstantHookTarget {
 	wchar_t targetDllName[MAX_PATH];        // target dll name
@@ -63,7 +74,8 @@ struct InstantHookTarget {
 	wchar_t dllPath[MAX_PATH];              // hook code dll path
 	wchar_t script[MAX_PATH];              // Lua mode: script file path
 	wchar_t handler[256];                  // Lua mode: handler function name
-	int hookMode;                          // 0=DLL, 1=Lua
+	wchar_t patchHex[256];                 // Patch mode: hex byte sequence
+	HookMode hookMode;
 	InstantHookTarget* next;
 };
 static InstantHookTarget* g_InstantHookList = nullptr;
@@ -823,6 +835,7 @@ OnProcessAttach(
 	_In_ PVOID ModuleHandle
 )
 {
+	DbgBreakPoint();
 	// add dll reference, so we can be unloaded by calling freelibrary
 	LdrAddRefDll(LDR_ADDREF_DLL_PIN, ModuleHandle);
 
@@ -934,8 +947,9 @@ OnProcessAttach(
 // x86: hook before ret, get unicode string from first stack parameter
 // We use capstone to locate ret instruction and search back to get enough space to write trampoline code
 	do {
-		// first check if dealy_hook.hash exist, we can reuse CheckSignalFile, only change format
-		if (CheckSignalFile((UCHAR*)ntPath, len, DELAY_HOOK_SIGNAL_FILE_FMT, TRUE)) {
+		// first check if delay.hook.{hash} or delay.patch.{hash} exist
+		if (CheckSignalFile((UCHAR*)ntPath, len, DELAY_HOOK_SIGNAL_FILE_FMT, TRUE) ||
+			CheckSignalFile((UCHAR*)ntPath, len, DELAY_PATCH_SIGNAL_FILE_FMT, TRUE)) {
 
 #ifdef _WIN64
 			// x64: write place holder function to GetRdi code: mov rax, rdi; ret
@@ -1014,7 +1028,7 @@ OnProcessAttach(
 			InstantHookTarget* pNode = g_InstantHookList;
 			while (pNode) {
 				// there is no need to load dll in lua hook mode
-				if (pNode->hookMode == 1) {
+				if (pNode->hookMode == HOOK_MODE_LUA || pNode->hookMode == HOOK_MODE_PATCH) {
 					pNode = pNode->next;
 					continue;
 				}
@@ -1528,7 +1542,7 @@ static unsigned long long ComputeFnvHash(const WCHAR* str, USHORT charCount, boo
 }
 
 // Write current PID to hook event file
-static VOID WriteHookEventFile(unsigned long long processFnvHash, unsigned long long dllFnvHash, unsigned long long offset) {
+static VOID WriteHookEventFile(unsigned long long processFnvHash, unsigned long long dllFnvHash, unsigned long long offset, bool isPatchMode) {
 	WCHAR hookEventPath[MAX_PATH];
 	IO_STATUS_BLOCK iosb;
 	HANDLE hFile = NULL;
@@ -1537,8 +1551,12 @@ static VOID WriteHookEventFile(unsigned long long processFnvHash, unsigned long 
 	// Get current PID
 	ULONG pid = (ULONG)(ULONG_PTR)NtCurrentProcessId();
 
-	// Build path: \??\C:\users\public\hookevent.{processFnvHash}.{dllFnvHash}.{offset}
-	swprintf_s(hookEventPath, NT_HOOK_EVENT_PID_FILE_FMT, processFnvHash, dllFnvHash, offset);
+	// Build path using mode-tagged PID file format
+	if (isPatchMode) {
+		swprintf_s(hookEventPath, NT_HOOK_EVENT_PID_FILE_PATCH_FMT, processFnvHash, dllFnvHash, offset);
+	} else {
+		swprintf_s(hookEventPath, NT_HOOK_EVENT_PID_FILE_HOOK_FMT, processFnvHash, dllFnvHash, offset);
+	}
 
 	NTSTATUS status = NtCreateFileOverwrite(&hFile, hookEventPath);
 
@@ -1896,11 +1914,11 @@ static bool LoadDllFromControllerDir(PFN_LdrLoadDll pLdrLoadDll, const WCHAR* dl
 	NtClose(hProcess);
 	return result;
 }
-static BOOL ScanDelayHookFiles(const WCHAR* ntPath, size_t byteLen) {
-	unsigned long long processFnvHash = ComputeFnvHash(ntPath, (USHORT)(byteLen / sizeof(WCHAR)));
 
+// Scan a single delay file (delay.hook or delay.patch) and add entries to g_InstantHookList
+static BOOL ScanDelayFile(unsigned long long processFnvHash, const WCHAR* ntFilePathFmt, bool isPatchMode) {
 	WCHAR filePath[MAX_PATH];
-	swprintf_s(filePath, NT_DELAY_HOOK_FILE_FMT, processFnvHash);
+	swprintf_s(filePath, ntFilePathFmt, processFnvHash);
 
 	HANDLE hFile = NULL;
 	IO_STATUS_BLOCK iosb;
@@ -1943,10 +1961,15 @@ static BOOL ScanDelayHookFiles(const WCHAR* ntPath, size_t byteLen) {
 		unsigned long long dllFnvHash = ComputeFnvHash(e->module, nameLen);
 		unsigned long long offsetValue = ParseHexString(e->offsetStr);
 
-		// Open events
+		// Open events — use mode-tagged names to separate hook vs patch
 		WCHAR loadEventName[MAX_PATH], hookEventName[MAX_PATH];
-		swprintf_s(loadEventName, NT_LOAD_NOTIFY_EVENT_FMT, processFnvHash, dllFnvHash, offsetValue);
-		swprintf_s(hookEventName, NT_HOOK_NOTIFY_EVENT_FMT, processFnvHash, dllFnvHash, offsetValue);
+		if (isPatchMode) {
+			swprintf_s(loadEventName, NT_LOAD_NOTIFY_PATCH_EVENT_FMT, processFnvHash, dllFnvHash, offsetValue);
+			swprintf_s(hookEventName, NT_HOOK_NOTIFY_PATCH_EVENT_FMT, processFnvHash, dllFnvHash, offsetValue);
+		} else {
+			swprintf_s(loadEventName, NT_LOAD_NOTIFY_HOOK_EVENT_FMT, processFnvHash, dllFnvHash, offsetValue);
+			swprintf_s(hookEventName, NT_HOOK_NOTIFY_HOOK_EVENT_FMT, processFnvHash, dllFnvHash, offsetValue);
+		}
 
 		UNICODE_STRING usLoad, usHook;
 		RtlInitUnicodeString(&usLoad, loadEventName);
@@ -1978,11 +2001,28 @@ static BOOL ScanDelayHookFiles(const WCHAR* ntPath, size_t byteLen) {
 			wcscpy_s(node->dllPath, e->dllPath);
 			wcscpy_s(node->script, e->script);
 			wcscpy_s(node->handler, e->handler);
-			node->hookMode = e->script[0] ? 1 : 0;
+			// Detect patch mode: export name starts with "patch."
+			if (e->exportName[0] && wcsncmp(e->exportName, L"patch.", 6) == 0) {
+				node->hookMode = HOOK_MODE_PATCH;
+				wcscpy_s(node->patchHex, e->exportName + 6);
+			}
+			else {
+				node->hookMode = static_cast<HookMode>(e->script[0] ? HOOK_MODE_LUA : HOOK_MODE_DLL);
+			}
 			node->next = g_InstantHookList;
 			g_InstantHookList = node;
 		}
 	}
+
+	return numEntries > 0;
+}
+
+// Scan both delay.hook and delay.patch files for a process
+static BOOL ScanDelayHookFiles(const WCHAR* ntPath, size_t byteLen) {
+	unsigned long long processFnvHash = ComputeFnvHash(ntPath, (USHORT)(byteLen / sizeof(WCHAR)));
+
+	BOOL hookOk = ScanDelayFile(processFnvHash, NT_DELAY_HOOK_FILE_FMT, false);
+	BOOL patchOk = ScanDelayFile(processFnvHash, NT_DELAY_PATCH_FILE_FMT, true);
 
 	return g_InstantHookList != nullptr;
 }
@@ -2029,7 +2069,7 @@ void __fastcall LdrLoadDll_HookHandler(PVOID rcx, PVOID rdx, PVOID r8, PVOID r9,
 				processFnvHash = ComputeFnvHash(us->Buffer, us->Length / sizeof(WCHAR));
 
 				// Write current PID to hook event file
-				WriteHookEventFile(processFnvHash, dllFnvHash, node->offset);
+				WriteHookEventFile(processFnvHash, dllFnvHash, node->offset, node->hookMode == HOOK_MODE_PATCH);
 			}
 			// Match! Signal LoadNotify and wait for HookNotify
 			if (node->hLoadNotifyEvent) {
@@ -2039,7 +2079,9 @@ void __fastcall LdrLoadDll_HookHandler(PVOID rcx, PVOID rdx, PVOID r8, PVOID r9,
 			if (node->hHookNotifyEvent) {
 				// Wait for UMController to finish applying hook
 				NtWaitForSingleObject(node->hHookNotifyEvent, FALSE, NULL);
-				if (node->hookMode == 1)
+				if (node->hookMode == HOOK_MODE_PATCH)
+					EtwLog(L"being signaled that dll=%s is patched with bytes=%s\n", node->targetDllName, node->patchHex);
+				else if (node->hookMode == HOOK_MODE_LUA)
 					EtwLog(L"being signaled that dll=%s is hooked with lua script=%s handler=%s\n", node->targetDllName, node->script, node->handler);
 				else
 					EtwLog(L"being signaled that dll=%s is hooked with hook code dll=%s\n", node->targetDllName, node->dllPath);

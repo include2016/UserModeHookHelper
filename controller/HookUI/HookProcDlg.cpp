@@ -308,16 +308,18 @@ RollBack:
 						DWORD hi = createTime.dwHighDateTime; DWORD lo = createTime.dwLowDateTime;
 						(void)m_services->RemoveProcHookEntry(m_pid, hi, lo, hr->id);
 					}
-					if (!HookCore::RemoveHook(m_pid, hr->address, m_services, hr->id,
-						hr->ori_asm_code_len, (PVOID)hr->trampoline_pit)) {
-						LOG_UI(m_services, L"failed to remove hook at Addr=0x%p\n", hr->address);
-						MessageBox(L"Failed to remove hook first before rehooking the same address", L"Hook",
-							MB_OK | MB_ICONERROR);
-						return;
-					}
+						if (!hr->IsPatchEntry()) {
+							if (!HookCore::RemoveHook(m_pid, hr->address, m_services, hr->id,
+								hr->ori_asm_code_len, (PVOID)hr->trampoline_pit)) {
+								LOG_UI(m_services, L"failed to remove hook at Addr=0x%phuanhangfu", hr->address);
+								MessageBox(L"Failed to remove hook first before rehooking the same address", L"Hook",
+									MB_OK | MB_ICONERROR);
+								return;
+							}
+						}
 					// remove succeed, mark this hookid available
 					// its previous value should be 1
-					if (!_bittestandreset((LONG*)m_exp_num_tracker_bitfield, hr->id)) {
+					if (!hr->IsPatchEntry() && !_bittestandreset((LONG*)m_exp_num_tracker_bitfield, hr->id)) {
 						MessageBox(L"hookid should be set before reset", L"Hook", MB_OK | MB_ICONERROR);
 						return ;
 					}
@@ -531,21 +533,33 @@ BOOL HookProcDlg::OnInitDialog() {
 			// We'll accept any returned HookRow and add those matching m_pid.
 			// Note: If the controller uses a combined key, it may choose to return only matching rows.
 			// restore row preserving hook id
-			if (pr.id == -1) continue; // skip invalid
-			HookRow* hr = new HookRow(pr);
-			// If caller didn't populate ori_asm_code_addr, it will be zero.
-			CString idC; idC.Format(L"%d", hr->id);
-			CString addrC; addrC.Format(L"0x%llX", hr->address);
-			int idx = m_HookList.GetItemCount();
-			int i = m_HookList.InsertItem(idx, idC);
-			m_HookList.SetItemText(i, 1, addrC);
-			m_HookList.SetItemText(i, 2, hr->module.c_str());
-			if (!hr->expFunc.empty()) m_HookList.SetItemText(i, 3, hr->expFunc.c_str());
-			m_HookList.SetItemData(i, (DWORD_PTR)hr);
-			// mark unvaliable
-			if (_bittestandset((LONG*)m_exp_num_tracker_bitfield, hr->id)) {
-				MessageBox(L"OnInitDialog: hook id reuse deteced, abort!", L"Hook", MB_OK | MB_ICONERROR);
-				return FALSE;
+			if (pr.id == -1) {
+				// Patch mode entry: display in UI but skip bitfield tracking
+				HookRow* hr = new HookRow(pr);
+				CString addrC; addrC.Format(L"0x%llX", hr->address);
+				int idx = m_HookList.GetItemCount();
+				int i = m_HookList.InsertItem(idx, L"P");
+				m_HookList.SetItemText(i, 1, addrC);
+				m_HookList.SetItemText(i, 2, hr->module.c_str());
+				if (!hr->expFunc.empty()) m_HookList.SetItemText(i, 3, hr->expFunc.c_str());
+				m_HookList.SetItemData(i, (DWORD_PTR)hr);
+			} else {
+				if (pr.id < 0 || pr.id >= 256) continue; // skip invalid
+				HookRow* hr = new HookRow(pr);
+				// If caller didn't populate ori_asm_code_addr, it will be zero.
+				CString idC; idC.Format(L"%d", hr->id);
+				CString addrC; addrC.Format(L"0x%llX", hr->address);
+				int idx = m_HookList.GetItemCount();
+				int i = m_HookList.InsertItem(idx, idC);
+				m_HookList.SetItemText(i, 1, addrC);
+				m_HookList.SetItemText(i, 2, hr->module.c_str());
+				if (!hr->expFunc.empty()) m_HookList.SetItemText(i, 3, hr->expFunc.c_str());
+				m_HookList.SetItemData(i, (DWORD_PTR)hr);
+				// mark unvaliable
+				if (_bittestandset((LONG*)m_exp_num_tracker_bitfield, hr->id)) {
+					MessageBox(L"OnInitDialog: hook id reuse deteced, abort!", L"Hook", MB_OK | MB_ICONERROR);
+					return FALSE;
+				}
 			}
 		}
 	}
@@ -646,7 +660,7 @@ int HookProcDlg::AddHookEntry(const HookRow& row) {
 	// remove duplicated hookentry by checking hookid
 	for (int j = 0; j < m_HookList.GetItemCount(); ++j) {
 		HookRow* existing = reinterpret_cast<HookRow*>(m_HookList.GetItemData(j));
-		if (existing && existing->id == row.id) {
+		if (existing && !existing->IsPatchEntry() && existing->id == row.id) {
 			// Remove old UI row and free it; keep bitfield state as-is since we reuse the same id
 			m_HookList.DeleteItem(j);
 			delete existing;
@@ -655,9 +669,8 @@ int HookProcDlg::AddHookEntry(const HookRow& row) {
 	}
 	
 	int idx = m_HookList.GetItemCount();
-	int useId = row.id;
 	CString addrC; addrC.Format(L"0x%llX", row.address);
-	CString useIdC; useIdC.Format(L"%d", useId);
+	CString useIdC; if (row.IsPatchEntry()) useIdC = L"P"; else useIdC.Format(L"%d", row.id);
 	int i = m_HookList.InsertItem(idx, useIdC);
 	m_HookList.SetItemText(i, 1, addrC);
 	m_HookList.SetItemText(i, 2, row.module.c_str());
@@ -910,15 +923,18 @@ void HookProcDlg::OnHookMenuRemove() {
 	HookRow* hr = reinterpret_cast<HookRow*>(m_HookList.GetItemData(item));
 	if (!hr) return;
 	// Persist removal of this specific hook entry first to avoid stale records
-	if (!HookCore::RemoveHook(m_pid, hr->address, m_services, hr->id, hr->ori_asm_code_len, (PVOID)hr->trampoline_pit)) {
-		if (m_services)
-			LOG_UI(m_services, L"failed to call HookCore::RemoveHook\n");
-		MessageBoxW(L"failed to call HookCore::RemoveHook\n", L"Hook", MB_OK | MB_ICONERROR);
-		return;
+	// Persist removal of this specific hook entry first to avoid stale records
+	if (!hr->IsPatchEntry()) {
+		if (!HookCore::RemoveHook(m_pid, hr->address, m_services, hr->id, hr->ori_asm_code_len, (PVOID)hr->trampoline_pit)) {
+			if (m_services)
+				LOG_UI(m_services, L"failed to call HookCore::RemoveHookhuanhangfu");
+			MessageBoxW(L"failed to call HookCore::RemoveHookhuanhangfu", L"Hook", MB_OK | MB_ICONERROR);
+			return;
+		}
 	}
 	// remove succeed, mark this hookid available
 	// its previous value should be 1
-	if (!_bittestandreset((LONG*)m_exp_num_tracker_bitfield, hr->id)) {
+	if (!hr->IsPatchEntry() && !_bittestandreset((LONG*)m_exp_num_tracker_bitfield, hr->id)) {
 		MessageBox(L"hookid should be set before reset", L"Hook", MB_OK | MB_ICONERROR);
 		return;
 	}
@@ -1087,14 +1103,16 @@ bool HookProcDlg::HookCommonCode(DWORD64 module_base, DWORD module_offset,std::w
 		if (hr->address == addr) {
 			rehook = true;
 			LOG_UI(m_services, L"trying hook address that has already been hooked, recover to original code first\n");
-			if (!HookCore::RemoveHook(m_pid, addr, m_services, hr->id, hr->ori_asm_code_len, (PVOID)hr->trampoline_pit)) {
-				LOG_UI(m_services, L"failed to remove hook first before rehooking the same address\n");
-				MessageBox(L"Failed to remove hook first before rehooking the same address", L"Hook", MB_OK | MB_ICONERROR);
-				return false;
-			}
+				if (!hr->IsPatchEntry()) {
+					if (!HookCore::RemoveHook(m_pid, addr, m_services, hr->id, hr->ori_asm_code_len, (PVOID)hr->trampoline_pit)) {
+						LOG_UI(m_services, L"failed to remove hook first before rehooking the same addresshuanhangfu");
+						MessageBox(L"Failed to remove hook first before rehooking the same address", L"Hook", MB_OK | MB_ICONERROR);
+						return false;
+					}
+				}
 			// remove succeed, mark this hookid available
 			// its previous value should be 1
-			if (!_bittestandreset((LONG*)m_exp_num_tracker_bitfield, hr->id)) {
+			if (!hr->IsPatchEntry() && !_bittestandreset((LONG*)m_exp_num_tracker_bitfield, hr->id)) {
 				MessageBox(L"hookid should be set before reset", L"Hook", MB_OK | MB_ICONERROR);
 				return false;
 			}
@@ -1221,12 +1239,14 @@ bool HookProcDlg::HookCommonCodeLua(DWORD64 module_base, DWORD module_offset, st
 		HookRow* hr = reinterpret_cast<HookRow*>(m_HookList.GetItemData(i));
 		if (!hr) continue;
 		if (hr->address == addr) {
-			LOG_UI(m_services, L"rehook detected at 0x%llX\n", addr);
-			if (!HookCore::RemoveHook(m_pid, addr, m_services, hr->id, hr->ori_asm_code_len, (PVOID)hr->trampoline_pit)) {
-				MessageBox(L"Failed to remove hook before rehooking", L"Hook", MB_OK | MB_ICONERROR);
-				return false;
-			}
-			_bittestandreset((LONG*)m_exp_num_tracker_bitfield, hr->id);
+				LOG_UI(m_services, L"rehook detected at 0x%llXhuanhangfu", addr);
+				if (!hr->IsPatchEntry()) {
+					if (!HookCore::RemoveHook(m_pid, addr, m_services, hr->id, hr->ori_asm_code_len, (PVOID)hr->trampoline_pit)) {
+						MessageBox(L"Failed to remove hook before rehooking", L"Hook", MB_OK | MB_ICONERROR);
+						return false;
+					}
+				}
+			if (!hr->IsPatchEntry()) _bittestandreset((LONG*)m_exp_num_tracker_bitfield, hr->id);
 			FILETIME createTime{ 0,0 }; HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, m_pid);
 			if (h) { FILETIME et, k, u; if (GetProcessTimes(h, &createTime, &et, &k, &u)) {} CloseHandle(h); }
 			DWORD hi = createTime.dwHighDateTime; DWORD lo = createTime.dwLowDateTime;

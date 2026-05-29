@@ -22,6 +22,12 @@ public:
         std::wstring hookSeqPath;         // path to .hookseq file (for persistence)
     };
 
+    struct PatchEntry {
+        std::wstring module;
+        std::wstring offsetStr;
+        std::wstring patchHex;            // hex byte sequence (e.g. "31C0C3")
+    };
+
     InstantHookManager(IHookServices* services);
     ~InstantHookManager();
 
@@ -37,6 +43,9 @@ public:
     // Stop listeners for a specific process hash
     void StopByProcessHash(unsigned long long processFnvHash);
 
+    // Stop listeners for a specific process hash and mode (isPatch=true: patch only, false: hook only)
+    void StopByProcessHashAndMode(unsigned long long processFnvHash, bool isPatch);
+
     // Check if we have active listeners for a process hash
     bool HasListenerForHash(unsigned long long processFnvHash) const;
 
@@ -47,6 +56,15 @@ public:
     static unsigned long long ComputeFnvHash(const wchar_t* str);
 
     static bool ParseHookSeqFile(const wchar_t* filePath, std::vector<HookTarget>& outTargets);
+
+    // Parse .patchseq file into PatchEntry list
+    static bool ParsePatchSeqFile(const wchar_t* filePath, std::vector<PatchEntry>& outEntries);
+
+    // Convert .patchseq to .hookseq file, returns the output .hookseq path
+    static bool ConvertPatchSeqToHookSeq(const wchar_t* patchSeqPath, std::wstring& outHookSeqPath);
+
+    // Convert hex string (e.g. "31C0C3") to byte vector
+    static std::vector<BYTE> HexToBytes(const std::wstring& hex);
 
 private:
     // Per-PID hook ID allocator: each PID gets its own 256-bit bitfield
@@ -65,6 +83,7 @@ private:
     struct ListenerContext {
         InstantHookManager* mgr;
         HookTarget target;
+        bool isPatchMode;      // true if this listener is for patch mode (patch. prefix)
         HANDLE hLoadNotify;   // LoadNotify.<pFnv>.<dllFnv>
         HANDLE hHookNotify;   // HookNotify.<pFnv>.<dllFnv>
         HANDLE hStopEvent;    // Event to signal thread to stop

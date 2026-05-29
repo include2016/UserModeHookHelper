@@ -43,8 +43,9 @@
 #define HOOK_DLL_UM_WAKEUP_EVENT L"Global\\" WAKEUP_EVENT_BASE
 #endif
 // Hook mode constants
-#define HOOK_MODE_DLL  0   // hook_code_addr points to DLL export function
-#define HOOK_MODE_LUA  1   // hook_code_addr points to LuaEngine dispatch
+#define HOOK_MODE_DLL   0   // hook_code_addr points to DLL export function
+#define HOOK_MODE_LUA   1   // hook_code_addr points to LuaEngine dispatch
+#define HOOK_MODE_PATCH 2   // direct byte patch (no hook trampoline)
 
 #define LUA_ENGINE_SIGNAL_EVENT_BASE    L"LUA_ENGINE_SIGNAL.%u_%d"
 #define LUA_ENGINE_NT_SIGNAL_EVENT      L"\\BaseNamedObjects\\" LUA_ENGINE_SIGNAL_EVENT_BASE
@@ -181,6 +182,8 @@ typedef struct _PH_MODULE_LIST_NODE {
 
 #define UM_DELAY_HOOK_FILE_FMT L"C:\\users\\public\\delay.hook.%16llx"
 #define NT_DELAY_HOOK_FILE_FMT L"\\??\\" UM_DELAY_HOOK_FILE_FMT
+#define UM_DELAY_PATCH_FILE_FMT L"C:\\users\\public\\delay.patch.%16llx"
+#define NT_DELAY_PATCH_FILE_FMT L"\\??\\" UM_DELAY_PATCH_FILE_FMT
 
 #define LOAD_NOTIFY_EVENT_FMT L"LoadNotify.%016llx.%016llx.%016llx"
 #define NT_LOAD_NOTIFY_EVENT_FMT L"\\BaseNamedObjects\\" LOAD_NOTIFY_EVENT_FMT
@@ -190,9 +193,33 @@ typedef struct _PH_MODULE_LIST_NODE {
 #define NT_HOOK_NOTIFY_EVENT_FMT L"\\BaseNamedObjects\\" HOOK_NOTIFY_EVENT_FMT
 #define UM_HOOK_NOTIFY_EVENT_FMT L"Global\\" HOOK_NOTIFY_EVENT_FMT
 
+// Instant hook mode event names
+#define LOAD_NOTIFY_HOOK_EVENT_FMT    L"LoadNotify.instant.hook.%016llx.%016llx.%016llx"
+#define NT_LOAD_NOTIFY_HOOK_EVENT_FMT   L"\\BaseNamedObjects\\" LOAD_NOTIFY_HOOK_EVENT_FMT
+#define UM_LOAD_NOTIFY_HOOK_EVENT_FMT   L"Global\\" LOAD_NOTIFY_HOOK_EVENT_FMT
+
+#define HOOK_NOTIFY_HOOK_EVENT_FMT    L"HookNotify.instant.hook.%016llx.%016llx.%016llx"
+#define NT_HOOK_NOTIFY_HOOK_EVENT_FMT   L"\\BaseNamedObjects\\" HOOK_NOTIFY_HOOK_EVENT_FMT
+#define UM_HOOK_NOTIFY_HOOK_EVENT_FMT   L"Global\\" HOOK_NOTIFY_HOOK_EVENT_FMT
+
+// Instant patch mode event names
+#define LOAD_NOTIFY_PATCH_EVENT_FMT   L"LoadNotify.instant.patch.%016llx.%016llx.%016llx"
+#define NT_LOAD_NOTIFY_PATCH_EVENT_FMT  L"\\BaseNamedObjects\\" LOAD_NOTIFY_PATCH_EVENT_FMT
+#define UM_LOAD_NOTIFY_PATCH_EVENT_FMT  L"Global\\" LOAD_NOTIFY_PATCH_EVENT_FMT
+
+#define HOOK_NOTIFY_PATCH_EVENT_FMT   L"HookNotify.instant.patch.%016llx.%016llx.%016llx"
+#define NT_HOOK_NOTIFY_PATCH_EVENT_FMT  L"\\BaseNamedObjects\\" HOOK_NOTIFY_PATCH_EVENT_FMT
+#define UM_HOOK_NOTIFY_PATCH_EVENT_FMT  L"Global\\" HOOK_NOTIFY_PATCH_EVENT_FMT
+
 #define UMCONTROLLER_PID_FILE L"C:\\users\\public\\umcontroller.pid"
 
 
 #define UM_HOOK_EVENT_PID_FILE_FMT L"C:\\users\\public\\hookevent.%016llx.%016llx.%016llx"
 #define NT_HOOK_EVENT_PID_FILE_FMT L"\\??\\" UM_HOOK_EVENT_PID_FILE_FMT
+
+#define UM_HOOK_EVENT_PID_FILE_HOOK_FMT  L"C:\\users\\public\\hookevent.instant.hook.%016llx.%016llx.%016llx"
+#define NT_HOOK_EVENT_PID_FILE_HOOK_FMT L"\\??\\" UM_HOOK_EVENT_PID_FILE_HOOK_FMT
+
+#define UM_HOOK_EVENT_PID_FILE_PATCH_FMT L"C:\\users\\public\\hookevent.instant.patch.%016llx.%016llx.%016llx"
+#define NT_HOOK_EVENT_PID_FILE_PATCH_FMT L"\\??\\" UM_HOOK_EVENT_PID_FILE_PATCH_FMT
 

@@ -16,6 +16,8 @@ struct HookRow {
 	unsigned long long ori_asm_code_addr;
     unsigned long ori_asm_code_len;
 	unsigned long long trampoline_pit;
+
+	bool IsPatchEntry() const { return id == -1; }
 };
 
 namespace HookRowUtils {

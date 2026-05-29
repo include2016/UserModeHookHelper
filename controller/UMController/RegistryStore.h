@@ -104,4 +104,14 @@ namespace RegistryStore {
     bool RemoveInstantHookEntry(unsigned long long processFnvHash);
     bool HasInstantHookEntry(unsigned long long processFnvHash);
 
+    // Instant Patch configuration persistence
+    // Value name: InstantPatchList (REG_MULTI_SZ)
+    // Each entry formatted as: PROCESS_FNV_HASH:DLL_FNV_HASH:PATCHSEQ_PATH
+    // Where PATCHSEQ_PATH is the path to .patchseq file
+    bool ReadInstantPatchList(std::vector<std::tuple<unsigned long long, unsigned long long, std::wstring>>& outEntries);
+    bool WriteInstantPatchList(const std::vector<std::tuple<unsigned long long, unsigned long long, std::wstring>>& entries);
+    bool AddInstantPatchEntry(unsigned long long processFnvHash, unsigned long long dllFnvHash, const std::wstring& patchSeqPath);
+    bool RemoveInstantPatchEntry(unsigned long long processFnvHash);
+    bool HasInstantPatchEntry(unsigned long long processFnvHash);
+
 }

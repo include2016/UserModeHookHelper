@@ -368,6 +368,8 @@ BEGIN_MESSAGE_MAP(CUMControllerDlg, CDialogEx)
 	ON_COMMAND(ID_MENU_TERMINATE_PROCESS, &CUMControllerDlg::OnTerminateProcess)
 	ON_COMMAND(ID_MENU_SET_INSTANT_HOOK, &CUMControllerDlg::OnSetInstantHook)
 	ON_COMMAND(ID_MENU_RELOAD_INSTANT_HOOK, &CUMControllerDlg::OnReloadInstantHook)
+	ON_COMMAND(ID_MENU_SET_INSTANT_PATCH, &CUMControllerDlg::OnSetInstantPatch)
+	ON_COMMAND(ID_MENU_RELOAD_INSTANT_PATCH, &CUMControllerDlg::OnReloadInstantPatch)
 END_MESSAGE_MAP()
 // Adapter implementing IHookServices for current process (bridges to ETW tracer)
 class HookServicesAdapter : public HookServicesBase {
@@ -791,7 +793,7 @@ BOOL CUMControllerDlg::OnInitDialog()
 			for (auto &entry : instantHooks) {
 				unsigned long long processFnvHash = std::get<0>(entry);
 				unsigned long long dllFnvHash = std::get<1>(entry);
-				const std::wstring& hookSeqPath = std::get<2>(entry);
+				std::wstring hookSeqPath = std::get<2>(entry);
 
 				// Parse the hookseq file to get targets
 				std::vector<InstantHookManager::HookTarget> targets;
@@ -813,6 +815,23 @@ BOOL CUMControllerDlg::OnInitDialog()
 						m_InstantHookMgr->AddTarget(t);
 					}
 					m_InstantHookMgr->StartAllListeners();
+					// Write delay.hook file for process startup detection
+					WCHAR delayFile[MAX_PATH];
+					swprintf_s(delayFile, UM_DELAY_HOOK_FILE_FMT, processFnvHash);
+					FILE* dhFin = NULL;
+					_wfopen_s(&dhFin, hookSeqPath.c_str(), L"rt, ccs=UNICODE");
+					if (dhFin) {
+						FILE* dhFout = NULL;
+						_wfopen_s(&dhFout, delayFile, L"wt, ccs=UNICODE");
+						if (dhFout) {
+							wchar_t dhBuf[4096];
+							while (fgetws(dhBuf, _countof(dhBuf), dhFin)) {
+								fputws(dhBuf, dhFout);
+							}
+							fclose(dhFout);
+						}
+						fclose(dhFin);
+					}
 					LOG_CTRL_ETW(L"Restored instant hook listener for processHash=%llx from %s\n", processFnvHash, hookSeqPath.c_str());
 				}
 			}
@@ -821,6 +840,69 @@ BOOL CUMControllerDlg::OnInitDialog()
 	catch (...) {
 		LOG_CTRL_ETW(L"Failed to restore instant hook listeners from registry\n");
 	}
+
+	// Restore instant patch listeners from registry
+	try {
+		std::vector<std::tuple<unsigned long long, unsigned long long, std::wstring>> instantPatches;
+		if (RegistryStore::ReadInstantPatchList(instantPatches)) {
+			for (auto &entry : instantPatches) {
+				unsigned long long processFnvHash = std::get<0>(entry);
+				unsigned long long dllFnvHash = std::get<1>(entry);
+				std::wstring patchSeqPath = std::get<2>(entry);
+
+				// Convert .patchseq to .hookseq
+				std::wstring hookSeqPath;
+				if (!InstantHookManager::ConvertPatchSeqToHookSeq(patchSeqPath.c_str(), hookSeqPath)) {
+					LOG_CTRL_ETW(L"Failed to convert .patchseq to .hookseq for processHash=%llx\n", processFnvHash);
+					continue;
+				}
+
+				// Parse the hookseq file to get targets
+				std::vector<InstantHookManager::HookTarget> targets;
+				if (InstantHookManager::ParseHookSeqFile(hookSeqPath.c_str(), targets)) {
+					for (auto& t : targets) {
+						t.processFnvHash = processFnvHash;
+
+						// Remove .dll suffix before computing hash
+						std::wstring moduleName = t.module;
+						if (moduleName.size() > 4) {
+							std::wstring suffix = moduleName.substr(moduleName.size() - 4);
+							std::transform(suffix.begin(), suffix.end(), suffix.begin(), ::tolower);
+							if (suffix == L".dll") {
+								moduleName = moduleName.substr(0, moduleName.size() - 4);
+							}
+						}
+						t.dllFnvHash = InstantHookManager::ComputeFnvHash(moduleName.c_str());
+						t.hookSeqPath = hookSeqPath;
+						m_InstantHookMgr->AddTarget(t);
+					}
+					m_InstantHookMgr->StartAllListeners();
+					// Write delay.patch file for process startup detection
+					WCHAR delayPatchFile[MAX_PATH];
+					swprintf_s(delayPatchFile, UM_DELAY_PATCH_FILE_FMT, processFnvHash);
+					FILE* dpFin = NULL;
+					_wfopen_s(&dpFin, hookSeqPath.c_str(), L"rt, ccs=UNICODE");
+					if (dpFin) {
+						FILE* dpFout = NULL;
+						_wfopen_s(&dpFout, delayPatchFile, L"wt, ccs=UNICODE");
+						if (dpFout) {
+							wchar_t dpBuf[4096];
+							while (fgetws(dpBuf, _countof(dpBuf), dpFin)) {
+								fputws(dpBuf, dpFout);
+							}
+							fclose(dpFout);
+						}
+						fclose(dpFin);
+					}
+					LOG_CTRL_ETW(L"Restored instant patch listener for processHash=%llx from %s\n", processFnvHash, patchSeqPath.c_str());
+				}
+			}
+		}
+	}
+	catch (...) {
+		LOG_CTRL_ETW(L"Failed to restore instant patch listeners from registry\n");
+	}
+
 
 	// TODO: Add extra initialization here
 	PM_Init();
@@ -1912,8 +1994,9 @@ void CUMControllerDlg::OnNMRClickListProc(NMHDR *pNMHDR, LRESULT *pResult)
 
 	// Add Force Inject menu for entries that are not in hook list and master DLL not loaded
 	menu.AppendMenu(MF_STRING, ID_MENU_FORCE_INJECT, L"Force Inject");
-	// Set Instant Hook for delay hook feature - toggle based on current state
+	// Set Instant Hook/Patch for delay hook feature - toggle based on current state (independent)
 	bool hasInstantHook = false;
+	bool hasInstantPatch = false;
 	std::wstring instantHookNtPath = item.path;
 	if (instantHookNtPath.empty()) {
 		ProcKey key{ pid, item.startTime };
@@ -1923,15 +2006,20 @@ void CUMControllerDlg::OnNMRClickListProc(NMHDR *pNMHDR, LRESULT *pResult)
 	if (!instantHookNtPath.empty()) {
 		unsigned long long procHash = InstantHookManager::ComputeFnvHash(instantHookNtPath.c_str());
 		hasInstantHook = RegistryStore::HasInstantHookEntry(procHash);
+		hasInstantPatch = RegistryStore::HasInstantPatchEntry(procHash);
 	}
 	if (hasInstantHook) {
 		menu.AppendMenu(MF_STRING, ID_MENU_SET_INSTANT_HOOK, L"Disable Instant Hook");
-		menu.AppendMenu(MF_STRING, ID_MENU_RELOAD_INSTANT_HOOK, L"Reload Instant Hook Sequence");
 	} else {
 		menu.AppendMenu(MF_STRING, ID_MENU_SET_INSTANT_HOOK, L"Enable Instant Hook");
-		// Reload only makes sense when instant hook is enabled; append disabled item so layout stays consistent
-		menu.AppendMenu(MF_STRING, ID_MENU_RELOAD_INSTANT_HOOK, L"Reload Instant Hook Sequence");
 	}
+	menu.AppendMenu(MF_STRING, ID_MENU_RELOAD_INSTANT_HOOK, L"Reload Instant Hook Sequence");
+	if (hasInstantPatch) {
+		menu.AppendMenu(MF_STRING, ID_MENU_SET_INSTANT_PATCH, L"Disable Instant Patch");
+	} else {
+		menu.AppendMenu(MF_STRING, ID_MENU_SET_INSTANT_PATCH, L"Enable Instant Patch");
+	}
+	menu.AppendMenu(MF_STRING, ID_MENU_RELOAD_INSTANT_PATCH, L"Reload Instant Patch Sequence");
 	menu.AppendMenu(MF_STRING, ID_MENU_UNPROTECT_PPL, L"Unprotect PPL");
 	menu.AppendMenu(MF_STRING, ID_MENU_ELEVATE_TO_PPL, L"Recover PPL");
 
@@ -1969,6 +2057,10 @@ void CUMControllerDlg::OnNMRClickListProc(NMHDR *pNMHDR, LRESULT *pResult)
 	menu.EnableMenuItem(ID_MENU_SET_INSTANT_HOOK, inHook ? MF_ENABLED : MF_GRAYED);
 	// Reload Instant Hook only valid when Instant Hook is currently enabled for this process
 	menu.EnableMenuItem(ID_MENU_RELOAD_INSTANT_HOOK, hasInstantHook ? MF_ENABLED : MF_GRAYED);
+	// Instant Patch requires process to be in hook list
+	menu.EnableMenuItem(ID_MENU_SET_INSTANT_PATCH, inHook ? MF_ENABLED : MF_GRAYED);
+	// Reload Instant Patch only valid when Instant Patch is currently enabled for this process
+	menu.EnableMenuItem(ID_MENU_RELOAD_INSTANT_PATCH, hasInstantPatch ? MF_ENABLED : MF_GRAYED);
 	// PPL menu mutual exclusivity based on persisted state (PID+start FILETIME)
 	DWORD hi = item.startTime.dwHighDateTime;
 	DWORD lo = item.startTime.dwLowDateTime;
@@ -2083,7 +2175,7 @@ void CUMControllerDlg::OnSetInstantHook()
 	if (RegistryStore::HasInstantHookEntry(processFnvHash)) {
 		// Disable operation
 		// Stop listener thread
-		m_InstantHookMgr->StopByProcessHash(processFnvHash);
+		m_InstantHookMgr->StopByProcessHashAndMode(processFnvHash, false);
 
 		// Remove registry entry
 		RegistryStore::RemoveInstantHookEntry(processFnvHash);
@@ -2130,7 +2222,8 @@ void CUMControllerDlg::OnSetInstantHook()
 		return;
 	}
 
-	// 6. Write C:\users\public\delay.hook.<processFnvHash> file
+
+	// 6. Write delay.hook file for processFnvHash
 	WCHAR delayFile[MAX_PATH];
 	swprintf_s(delayFile, UM_DELAY_HOOK_FILE_FMT, processFnvHash);
 
@@ -2240,6 +2333,7 @@ void CUMControllerDlg::OnReloadInstantHook()
 		return;
 	}
 
+
 	// 5. Parse hookseq file before disabling (so we don't leave hook disabled on failure)
 	std::vector<InstantHookManager::HookTarget> targets;
 	if (!InstantHookManager::ParseHookSeqFile(hookSeqPath.c_str(), targets)) {
@@ -2248,13 +2342,13 @@ void CUMControllerDlg::OnReloadInstantHook()
 	}
 
 	// 6. Disable part: stop listener, remove registry entry, delete delay.hook file
-	m_InstantHookMgr->StopByProcessHash(processFnvHash);
+	m_InstantHookMgr->StopByProcessHashAndMode(processFnvHash, false);
 	RegistryStore::RemoveInstantHookEntry(processFnvHash);
 	WCHAR delayFile[MAX_PATH];
 	swprintf_s(delayFile, UM_DELAY_HOOK_FILE_FMT, processFnvHash);
 	DeleteFileW(delayFile);
 
-	// 7. Enable part: write delay.hook file, add targets, start listeners
+	// 7. Enable part: write delay.hook file, add targets
 
 	FILE* fin = NULL;
 	_wfopen_s(&fin, hookSeqPath.c_str(), L"rt, ccs=UNICODE");
@@ -2302,6 +2396,277 @@ void CUMControllerDlg::OnReloadInstantHook()
 	// 7. Notify success
 	MessageBox(L"Instant Hook reloaded successfully.", L"Success", MB_ICONINFORMATION);
 }
+
+
+void CUMControllerDlg::OnSetInstantPatch()
+{
+	// 1. Get selected process entry's PID and NT path
+ 	int nItem = m_ProcListCtrl.GetNextItem(-1, LVNI_SELECTED);
+	if (nItem == -1) return;
+	PROC_ITEMDATA packed = (PROC_ITEMDATA)m_ProcListCtrl.GetItemData(nItem);
+	DWORD pid = PID_FROM_ITEMDATA(packed);
+
+	// Get NT path from cache or process entry
+	std::wstring ntPath;
+	ProcKey key{ pid, {} };
+	auto it = m_SessionNtPathCache.find(key);
+	if (it != m_SessionNtPathCache.end()) {
+		ntPath = it->second;
+	}
+	else {
+		// Try to get from process entry directly
+		ProcessEntry entry;
+		int idx = -1;
+		if (PM_GetEntryCopyByPid(pid, entry, &idx)) {
+			ntPath = entry.path;
+		}
+	}
+	if (ntPath.empty()) {
+		MessageBox(L"Cannot get process NT path", L"Error", MB_ICONERROR);
+		return;
+	}
+
+	// 2. Compute processFnvHash
+	unsigned long long processFnvHash = InstantHookManager::ComputeFnvHash(ntPath.c_str());
+
+	// 3. Check if instant patch is already enabled
+	if (RegistryStore::HasInstantPatchEntry(processFnvHash)) {
+		// Disable operation
+		// Stop patch listener threads only
+		m_InstantHookMgr->StopByProcessHashAndMode(processFnvHash, true);
+
+		// Remove registry entry
+		RegistryStore::RemoveInstantPatchEntry(processFnvHash);
+
+		// Delete delay.patch file
+		WCHAR delayPatchFile[MAX_PATH];
+		swprintf_s(delayPatchFile, UM_DELAY_PATCH_FILE_FMT, processFnvHash);
+		DeleteFileW(delayPatchFile);
+
+		MessageBox(L"Instant Patch disabled successfully.", L"Success", MB_ICONINFORMATION);
+		return;
+	}
+
+	// Enable operation
+	// Check if target process is already in hooklist
+	bool inHookList = false;
+	if (m_Filter.FLTCOMM_CheckHookList(ntPath)) {
+		inHookList = true;
+	}
+	else {
+		// Also check using hash
+		const UCHAR* bytes = reinterpret_cast<const UCHAR*>(ntPath.c_str());
+		size_t len = ntPath.size() * sizeof(wchar_t);
+		unsigned long long hval = Helper::GetNtPathHash(bytes, len);
+		inHookList = PM_IsHashInHookSet(hval);
+	}
+
+	if (!inHookList) {
+		MessageBox(L"Warning: Target process is not in hook list.\nPlease add it to hook list first.",
+			L"Warning", MB_ICONWARNING);
+		return;
+	}
+
+	// 4. Pop up CFileDialog to select .patchseq file
+	CFileDialog dlg(TRUE, L".patchseq", NULL, OFN_HIDEREADONLY | OFN_FILEMUSTEXIST,
+		L"PatchSeq Files (*.patchseq)|*.patchseq||");
+	if (dlg.DoModal() != IDOK) return;
+	std::wstring patchSeqPath = dlg.GetPathName();
+
+	// 5. Convert .patchseq to .hookseq
+	std::wstring hookSeqPath;
+	if (!InstantHookManager::ConvertPatchSeqToHookSeq(patchSeqPath.c_str(), hookSeqPath)) {
+		MessageBox(L"Failed to convert .patchseq to .hookseq", L"Error", MB_ICONERROR);
+		return;
+	}
+
+	// 6. Parse hookseq to get target DLL list
+	std::vector<InstantHookManager::HookTarget> targets;
+	if (!InstantHookManager::ParseHookSeqFile(hookSeqPath.c_str(), targets)) {
+		MessageBox(L"Failed to parse hookseq file", L"Error", MB_ICONERROR);
+		return;
+	}
+
+
+	// 7. Write delay.patch file for processFnvHash
+	WCHAR delayPatchFile[MAX_PATH];
+	swprintf_s(delayPatchFile, UM_DELAY_PATCH_FILE_FMT, processFnvHash);
+
+	// Copy hookseq content to delay.patch file
+	FILE* fin = NULL;
+	_wfopen_s(&fin, hookSeqPath.c_str(), L"rt, ccs=UNICODE");
+	if (!fin) {
+		MessageBox(L"Failed to open hookseq file", L"Error", MB_ICONERROR);
+		return;
+	}
+	FILE* fout = NULL;
+	_wfopen_s(&fout, delayPatchFile, L"wt, ccs=UNICODE");
+	if (!fout) {
+		fclose(fin);
+		MessageBox(L"Failed to create delay.patch file", L"Error", MB_ICONERROR);
+		return;
+	}
+	wchar_t buf[4096];
+	while (fgetws(buf, _countof(buf), fin)) {
+		fputws(buf, fout);
+	}
+	fclose(fin);
+	fclose(fout);
+
+	// 8. For each target DLL, add to InstantHookManager with dllFnvHash
+	for (auto& t : targets) {
+		t.targetPid = pid;
+		t.processNtPath = ntPath;
+		t.processFnvHash = processFnvHash;
+		t.hookSeqPath = hookSeqPath;  // Set hookSeqPath field
+
+		// Remove .dll suffix before computing hash
+		std::wstring moduleName = t.module;
+		if (moduleName.size() > 4) {
+			std::wstring suffix = moduleName.substr(moduleName.size() - 4);
+			std::transform(suffix.begin(), suffix.end(), suffix.begin(), ::tolower);
+			if (suffix == L".dll") {
+				moduleName = moduleName.substr(0, moduleName.size() - 4);
+			}
+		}
+
+		t.dllFnvHash = InstantHookManager::ComputeFnvHash(moduleName.c_str());
+
+		// Persist to registry (store the .patchseq path, not the converted .hookseq)
+		RegistryStore::AddInstantPatchEntry(processFnvHash, t.dllFnvHash, patchSeqPath);
+		m_InstantHookMgr->AddTarget(t);
+	}
+
+	// 9. Start all listeners
+	m_InstantHookMgr->StartAllListeners();
+
+	MessageBox(L"Instant Patch enabled successfully.", L"Success", MB_ICONINFORMATION);
+}
+
+void CUMControllerDlg::OnReloadInstantPatch()
+{
+	// 1. Get selected process entry's PID and NT path
+	int nItem = m_ProcListCtrl.GetNextItem(-1, LVNI_SELECTED);
+	if (nItem == -1) return;
+	PROC_ITEMDATA packed = (PROC_ITEMDATA)m_ProcListCtrl.GetItemData(nItem);
+	DWORD pid = PID_FROM_ITEMDATA(packed);
+
+	std::wstring ntPath;
+	ProcKey key{ pid, {} };
+	auto it = m_SessionNtPathCache.find(key);
+	if (it != m_SessionNtPathCache.end()) {
+		ntPath = it->second;
+	}
+	else {
+		ProcessEntry entry;
+		int idx = -1;
+		if (PM_GetEntryCopyByPid(pid, entry, &idx)) {
+			ntPath = entry.path;
+		}
+	}
+	if (ntPath.empty()) {
+		MessageBox(L"Cannot get process NT path", L"Error", MB_ICONERROR);
+		return;
+	}
+
+	// 2. Compute processFnvHash
+	unsigned long long processFnvHash = InstantHookManager::ComputeFnvHash(ntPath.c_str());
+
+	// 3. Defensive check: instant patch must already be enabled
+	if (!RegistryStore::HasInstantPatchEntry(processFnvHash)) {
+		MessageBox(L"Instant Patch is not enabled for this process.", L"Error", MB_ICONERROR);
+		return;
+	}
+
+	// 4. Read patchSeqPath from registry
+	std::wstring patchSeqPath;
+	{
+		std::vector<std::tuple<unsigned long long, unsigned long long, std::wstring>> entries;
+		if (!RegistryStore::ReadInstantPatchList(entries)) {
+			MessageBox(L"Failed to read Instant Patch registry entries.", L"Error", MB_ICONERROR);
+			return;
+		}
+		for (auto& entry : entries) {
+			if (std::get<0>(entry) == processFnvHash) {
+				patchSeqPath = std::get<2>(entry);
+				break;
+			}
+		}
+	}
+	if (patchSeqPath.empty()) {
+		MessageBox(L"Failed to retrieve patchseq path from registry.", L"Error", MB_ICONERROR);
+		return;
+	}
+
+	// 5. Convert .patchseq to .hookseq
+	std::wstring hookSeqPath;
+	if (!InstantHookManager::ConvertPatchSeqToHookSeq(patchSeqPath.c_str(), hookSeqPath)) {
+		MessageBox(L"Failed to convert .patchseq to .hookseq", L"Error", MB_ICONERROR);
+		return;
+	}
+
+	// 6. Parse hookseq file before disabling
+	std::vector<InstantHookManager::HookTarget> targets;
+	if (!InstantHookManager::ParseHookSeqFile(hookSeqPath.c_str(), targets)) {
+		MessageBox(L"Failed to parse hookseq file", L"Error", MB_ICONERROR);
+		return;
+	}
+
+	// 7. Disable part: stop patch listeners, remove registry entry, delete delay.patch file
+	m_InstantHookMgr->StopByProcessHashAndMode(processFnvHash, true);
+	RegistryStore::RemoveInstantPatchEntry(processFnvHash);
+	WCHAR delayPatchFile[MAX_PATH];
+	swprintf_s(delayPatchFile, UM_DELAY_PATCH_FILE_FMT, processFnvHash);
+	DeleteFileW(delayPatchFile);
+
+	// 8. Enable part: write delay.patch file, add targets
+
+	FILE* fin = NULL;
+	_wfopen_s(&fin, hookSeqPath.c_str(), L"rt, ccs=UNICODE");
+	if (!fin) {
+		MessageBox(L"Failed to open hookseq file", L"Error", MB_ICONERROR);
+		return;
+	}
+	FILE* fout = NULL;
+	_wfopen_s(&fout, delayPatchFile, L"wt, ccs=UNICODE");
+	if (!fout) {
+		fclose(fin);
+		MessageBox(L"Failed to create delay.patch file", L"Error", MB_ICONERROR);
+		return;
+	}
+	wchar_t buf[4096];
+	while (fgetws(buf, _countof(buf), fin)) {
+		fputws(buf, fout);
+	}
+	fclose(fin);
+	fclose(fout);
+
+	for (auto& t : targets) {
+		t.targetPid = pid;
+		t.processNtPath = ntPath;
+		t.processFnvHash = processFnvHash;
+		t.hookSeqPath = hookSeqPath;
+
+		std::wstring moduleName = t.module;
+		if (moduleName.size() > 4) {
+			std::wstring suffix = moduleName.substr(moduleName.size() - 4);
+			std::transform(suffix.begin(), suffix.end(), suffix.begin(), ::tolower);
+			if (suffix == L".dll") {
+				moduleName = moduleName.substr(0, moduleName.size() - 4);
+			}
+		}
+
+		t.dllFnvHash = InstantHookManager::ComputeFnvHash(moduleName.c_str());
+
+		RegistryStore::AddInstantPatchEntry(processFnvHash, t.dllFnvHash, patchSeqPath);
+		m_InstantHookMgr->AddTarget(t);
+	}
+
+	m_InstantHookMgr->StartAllListeners();
+
+	MessageBox(L"Instant Patch reloaded successfully.", L"Success", MB_ICONINFORMATION);
+}
+
 
 void CUMControllerDlg::OnElevateToPpl() {
 	int nItem = m_ProcListCtrl.GetNextItem(-1, LVNI_SELECTED);
