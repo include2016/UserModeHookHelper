@@ -77,7 +77,7 @@ end
 
 
 
-[目前已实现的binding](https://github.com/include2016/UserModeHookHelper/blob/41f7da0cf85870779f9222016351b9706aef925b/hook_component/LuaEngine/dllmain.cpp#L259)
+[目前已实现的binding](https://github.com/include2016/UserModeHookHelper/blob/main/hook_component/LuaEngine/dllmain.cpp#L796)
 
 
 
