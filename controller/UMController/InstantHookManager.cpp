@@ -488,9 +488,15 @@ void InstantHookManager::ListenerThreadImpl(ListenerContext* ctx) {
 		// ---- Patch mode: write bytes directly, skip hook application ----
 		if (isPatchMode) {
 			std::wstring hexStr = ctx->target.exportName.substr(6);
-			std::vector<BYTE> patchBytes = HexToBytes(hexStr);
+			std::wstring parseError;
+			std::vector<BYTE> patchBytes = HexToBytes(hexStr, &parseError);
 			if (patchBytes.empty()) {
-				LOG_CTRL_INSHOOK(L"patch mode: failed to decode hex bytes from export name: %s\n", ctx->target.exportName.c_str());
+				if (!parseError.empty()) {
+					LOG_CTRL_INSHOOK(L"patch mode: %s (input: %s)huanhangfu", parseError.c_str(), hexStr.c_str());
+					MessageBoxW(NULL, parseError.c_str(), L"Patch Format Error", MB_OK | MB_ICONERROR);
+				} else {
+					LOG_CTRL_INSHOOK(L"patch mode: empty byte sequence from export name: %shuanhangfu", ctx->target.exportName.c_str());
+				}
 				SetEvent(ctx->hHookNotify);
 				continue;
 			}
@@ -500,6 +506,23 @@ void InstantHookManager::ListenerThreadImpl(ListenerContext* ctx) {
 				LOG_CTRL_INSHOOK(L"patch mode: failed to get process handle, pid=%u\n", pid);
 				SetEvent(ctx->hHookNotify);
 				continue;
+			}
+
+			// Read original bytes before patching so we can restore later
+			std::vector<BYTE> oriBytes(patchBytes.size(), 0);
+			SIZE_T oriRead = 0;
+			bool oriReadOk = false;
+			{
+				DWORD oldProt = 0;
+				if (VirtualProtectEx(hProc, (LPVOID)targetAddress, patchBytes.size(), PAGE_EXECUTE_READWRITE, &oldProt)) {
+					if (ReadProcessMemory(hProc, (LPVOID)targetAddress, oriBytes.data(), patchBytes.size(), &oriRead) && oriRead == patchBytes.size()) {
+						oriReadOk = true;
+					}
+					VirtualProtectEx(hProc, (LPVOID)targetAddress, patchBytes.size(), oldProt, &oldProt);
+				}
+			}
+			if (!oriReadOk) {
+				LOG_CTRL_INSHOOK(L"patch mode: failed to read original bytes at 0x%llX, pid=%u\n", targetAddress, pid);
 			}
 
 			DWORD oldProtect = 0;
@@ -535,7 +558,15 @@ void InstantHookManager::ListenerThreadImpl(ListenerContext* ctx) {
 					row.id = -1; // patch mode doesn't use hook IDs
 					row.address = targetAddress;
 					row.module = ctx->target.module;
-					row.expFunc = L"Patch:" + hexStr;
+					std::wstring oriHexStr;
+					if (oriReadOk) {
+						for (size_t i = 0; i < oriBytes.size(); ++i) {
+							wchar_t h[3]; _snwprintf_s(h, 3, _TRUNCATE, L"%02X", oriBytes[i]);
+							oriHexStr += h;
+						}
+					}
+					row.expFunc = L"Patch:" + hexStr + L"|" + oriHexStr;
+
 					row.ori_asm_code_addr = 0;
 					row.ori_asm_code_len = (unsigned long)patchBytes.size();
 					row.trampoline_pit = 0;
@@ -843,21 +874,67 @@ unsigned long long InstantHookManager::ComputeFnvHash(const wchar_t* str) {
 	return hash;
 }
 
-std::vector<BYTE> InstantHookManager::HexToBytes(const std::wstring& hex) {
+std::vector<BYTE> InstantHookManager::HexToBytes(const std::wstring& hex, std::wstring* outError) {
 	std::vector<BYTE> bytes;
-	std::wstring clean;
-	for (wchar_t c : hex) {
-		if ((c >= L'0' && c <= L'9') || (c >= L'a' && c <= L'f') || (c >= L'A' && c <= L'F'))
-			clean += c;
+	if (outError) outError->clear();
+
+	// Normalize: strip all known prefixes/separators, collect hex digits + allowed delimiters
+	std::wstring normalized;
+	enum Expect { HEX_OR_DELIM, HEX_DIGIT2 };
+	Expect state = HEX_OR_DELIM;
+	size_t i = 0;
+	while (i < hex.size()) {
+		wchar_t c = hex[i];
+
+		// Skip whitespace and commas
+		if (c == L' ' || c == L'\t' || c == L',' || c == L';') {
+			i++;
+			state = HEX_OR_DELIM;
+			continue;
+		}
+		// Skip \x prefix
+		if (c == L'\\' && i + 1 < hex.size() && hex[i + 1] == L'x') {
+			i += 2;
+			state = HEX_DIGIT2;
+			continue;
+		}
+		// Skip 0x prefix
+		if (c == L'0' && i + 1 < hex.size() && (hex[i + 1] == L'x' || hex[i + 1] == L'X')) {
+			i += 2;
+			state = HEX_DIGIT2;
+			continue;
+		}
+		// Hex digit
+		if ((c >= L'0' && c <= L'9') || (c >= L'a' && c <= L'f') || (c >= L'A' && c <= L'F')) {
+			normalized += c;
+			i++;
+			// After collecting two hex digits, go back to expecting delimiter or hex
+			if (normalized.size() % 2 == 0)
+				state = HEX_OR_DELIM;
+			continue;
+		}
+		// Anything else is illegal
+		if (outError) {
+			wchar_t buf[128];
+			_snwprintf_s(buf, _countof(buf), _TRUNCATE, L"Illegal character '%c' at position %zu in byte sequence", c, i);
+			*outError = buf;
+		}
+		return bytes;
 	}
-	if (clean.size() % 2 != 0) return bytes;
-	for (size_t i = 0; i < clean.size(); i += 2) {
+
+	if (normalized.empty()) return bytes;
+	if (normalized.size() % 2 != 0) {
+		if (outError) *outError = L"Odd number of hex digits in byte sequence";
+		return bytes;
+	}
+
+	for (size_t j = 0; j < normalized.size(); j += 2) {
 		BYTE hi = 0, lo = 0;
-		wchar_t ch = clean[i];
+		wchar_t ch = normalized[j];
 		if (ch >= L'0' && ch <= L'9') hi = (BYTE)(ch - L'0');
 		else if (ch >= L'a' && ch <= L'f') hi = (BYTE)(ch - L'a' + 10);
 		else if (ch >= L'A' && ch <= L'F') hi = (BYTE)(ch - L'A' + 10);
-		ch = clean[i + 1];
+		ch = normalized[j + 1];
 		if (ch >= L'0' && ch <= L'9') lo = (BYTE)(ch - L'0');
 		else if (ch >= L'a' && ch <= L'f') lo = (BYTE)(ch - L'a' + 10);
 		else if (ch >= L'A' && ch <= L'F') lo = (BYTE)(ch - L'A' + 10);

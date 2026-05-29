@@ -12,6 +12,38 @@
 #include "../HookCoreLib/HookCore.h"
 #include "../UMController/Helper.h"
 #include "../UMController/RegistryStore.h"
+// Local HexToBytes helper - supports formats:
+//   31C0C3 | \x31\xC0\xC3 | 0x31,0xC0,0xC3 | 31 C0 C3 | 0x31 0xC0 0xC3
+static std::vector<BYTE> HexToBytes(const std::wstring& hex) {
+	std::vector<BYTE> bytes;
+
+	std::wstring normalized;
+	size_t i = 0;
+	while (i < hex.size()) {
+		wchar_t c = hex[i];
+		if (c == L' ' || c == L'	' || c == L',' || c == L';') { i++; continue; }
+		if (c == L'\\' && i + 1 < hex.size() && hex[i + 1] == L'x') { i += 2; continue; }
+		if (c == L'0' && i + 1 < hex.size() && (hex[i + 1] == L'x' || hex[i + 1] == L'X')) { i += 2; continue; }
+		if ((c >= L'0' && c <= L'9') || (c >= L'a' && c <= L'f') || (c >= L'A' && c <= L'F')) {
+			normalized += c; i++; continue;
+		}
+		return bytes;
+	}
+	if (normalized.empty() || normalized.size() % 2 != 0) return bytes;
+	for (size_t j = 0; j < normalized.size(); j += 2) {
+		BYTE hi = 0, lo = 0;
+		wchar_t ch = normalized[j];
+		if (ch >= L'0' && ch <= L'9') hi = (BYTE)(ch - L'0');
+		else if (ch >= L'a' && ch <= L'f') hi = (BYTE)(ch - L'a' + 10);
+		else hi = (BYTE)(ch - L'A' + 10);
+		ch = normalized[j + 1];
+		if (ch >= L'0' && ch <= L'9') lo = (BYTE)(ch - L'0');
+		else if (ch >= L'a' && ch <= L'f') lo = (BYTE)(ch - L'a' + 10);
+		else lo = (BYTE)(ch - L'A' + 10);
+		bytes.push_back((BYTE)((hi << 4) | lo));
+	}
+	return bytes;
+}
 #include "../../Shared/HookRow.h"
 #include "../../Shared/SharedMacroDef.h"
 #include "../ProcessHackerLib/phlib_expose.h"
@@ -308,10 +340,18 @@ RollBack:
 						DWORD hi = createTime.dwHighDateTime; DWORD lo = createTime.dwLowDateTime;
 						(void)m_services->RemoveProcHookEntry(m_pid, hi, lo, hr->id);
 					}
-						if (!hr->IsPatchEntry()) {
+						if (hr->IsPatchEntry()) {
+							auto oriVec = HexToBytes(hr->GetPatchOriHex());
+							if (!oriVec.empty() && !HookCore::RemovePatch(m_pid, hr->address, m_services, oriVec.data(), (DWORD)oriVec.size())) {
+								LOG_UI(m_services, L"failed to remove patch at Addr=0x%p\n", hr->address);
+								MessageBox(L"Failed to remove patch before rehooking the same address", L"Hook",
+									MB_OK | MB_ICONERROR);
+								return;
+							}
+						} else {
 							if (!HookCore::RemoveHook(m_pid, hr->address, m_services, hr->id,
 								hr->ori_asm_code_len, (PVOID)hr->trampoline_pit)) {
-								LOG_UI(m_services, L"failed to remove hook at Addr=0x%phuanhangfu", hr->address);
+								LOG_UI(m_services, L"failed to remove hook at Addr=0x%p\n", hr->address);
 								MessageBox(L"Failed to remove hook first before rehooking the same address", L"Hook",
 									MB_OK | MB_ICONERROR);
 								return;
@@ -866,10 +906,19 @@ void HookProcDlg::OnHookMenuDisable() {
 	}
 
 
-	if (!HookCore::DisableHook(m_pid, hr->address, m_services, (PVOID)hr->ori_asm_code_addr, hr->ori_asm_code_len)) {
-		LOG_UI(m_services, L"failed to call HookCore::DisableHook\n");
-		MessageBoxW(L"failed to call HookCore::DisableHook\n", L"Hook", MB_OK | MB_ICONERROR);
-		return;
+	if (hr->IsPatchEntry()) {
+		auto oriVec = HexToBytes(hr->GetPatchOriHex());
+		if (oriVec.empty() || !HookCore::DisablePatch(m_pid, hr->address, m_services, oriVec.data(), (DWORD)oriVec.size())) {
+			LOG_UI(m_services, L"failed to call HookCore::DisablePatch\n");
+			MessageBoxW(L"failed to call HookCore::DisablePatch\n", L"Hook", MB_OK | MB_ICONERROR);
+			return;
+		}
+	} else {
+		if (!HookCore::DisableHook(m_pid, hr->address, m_services, (PVOID)hr->ori_asm_code_addr, hr->ori_asm_code_len)) {
+			LOG_UI(m_services, L"failed to call HookCore::DisableHook\n");
+			MessageBoxW(L"failed to call HookCore::DisableHook\n", L"Hook", MB_OK | MB_ICONERROR);
+			return;
+		}
 	}
 
 	// Persist change
@@ -900,7 +949,16 @@ void HookProcDlg::OnHookMenuEnable() {
 		m_HookList.SetItemText(item, 2, mod.c_str());
 	}
 
-	HookCore::EnableHook(m_pid, hr->address, m_services, (PVOID)hr->trampoline_pit);
+	if (hr->IsPatchEntry()) {
+		auto patchVec = HexToBytes(hr->GetPatchHex());
+		if (patchVec.empty() || !HookCore::EnablePatch(m_pid, hr->address, m_services, patchVec.data(), (DWORD)patchVec.size())) {
+			LOG_UI(m_services, L"failed to call HookCore::EnablePatch\n");
+			MessageBoxW(L"failed to call HookCore::EnablePatch\n", L"Hook", MB_OK | MB_ICONERROR);
+			return;
+		}
+	} else {
+		HookCore::EnableHook(m_pid, hr->address, m_services, (PVOID)hr->trampoline_pit);
+	}
 
 	// Persist change
 	FILETIME createTime{ 0,0 }; HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, m_pid);
@@ -924,11 +982,19 @@ void HookProcDlg::OnHookMenuRemove() {
 	if (!hr) return;
 	// Persist removal of this specific hook entry first to avoid stale records
 	// Persist removal of this specific hook entry first to avoid stale records
-	if (!hr->IsPatchEntry()) {
+	if (hr->IsPatchEntry()) {
+		auto oriVec = HexToBytes(hr->GetPatchOriHex());
+		if (!oriVec.empty() && !HookCore::RemovePatch(m_pid, hr->address, m_services, oriVec.data(), (DWORD)oriVec.size())) {
+			if (m_services)
+				LOG_UI(m_services, L"failed to call HookCore::RemovePatch\n");
+			MessageBoxW(L"failed to call HookCore::RemovePatch\n", L"Hook", MB_OK | MB_ICONERROR);
+			return;
+		}
+	} else {
 		if (!HookCore::RemoveHook(m_pid, hr->address, m_services, hr->id, hr->ori_asm_code_len, (PVOID)hr->trampoline_pit)) {
 			if (m_services)
-				LOG_UI(m_services, L"failed to call HookCore::RemoveHookhuanhangfu");
-			MessageBoxW(L"failed to call HookCore::RemoveHookhuanhangfu", L"Hook", MB_OK | MB_ICONERROR);
+				LOG_UI(m_services, L"failed to call HookCore::RemoveHook\n");
+			MessageBoxW(L"failed to call HookCore::RemoveHook\n", L"Hook", MB_OK | MB_ICONERROR);
 			return;
 		}
 	}
@@ -1103,9 +1169,16 @@ bool HookProcDlg::HookCommonCode(DWORD64 module_base, DWORD module_offset,std::w
 		if (hr->address == addr) {
 			rehook = true;
 			LOG_UI(m_services, L"trying hook address that has already been hooked, recover to original code first\n");
-				if (!hr->IsPatchEntry()) {
+				if (hr->IsPatchEntry()) {
+					auto oriVec = HexToBytes(hr->GetPatchOriHex());
+					if (!oriVec.empty() && !HookCore::RemovePatch(m_pid, addr, m_services, oriVec.data(), (DWORD)oriVec.size())) {
+						LOG_UI(m_services, L"failed to remove patch first before rehooking the same address\n");
+						MessageBox(L"Failed to remove patch first before rehooking the same address", L"Hook", MB_OK | MB_ICONERROR);
+						return false;
+					}
+				} else {
 					if (!HookCore::RemoveHook(m_pid, addr, m_services, hr->id, hr->ori_asm_code_len, (PVOID)hr->trampoline_pit)) {
-						LOG_UI(m_services, L"failed to remove hook first before rehooking the same addresshuanhangfu");
+						LOG_UI(m_services, L"failed to remove hook first before rehooking the same address\n");
 						MessageBox(L"Failed to remove hook first before rehooking the same address", L"Hook", MB_OK | MB_ICONERROR);
 						return false;
 					}
@@ -1239,8 +1312,14 @@ bool HookProcDlg::HookCommonCodeLua(DWORD64 module_base, DWORD module_offset, st
 		HookRow* hr = reinterpret_cast<HookRow*>(m_HookList.GetItemData(i));
 		if (!hr) continue;
 		if (hr->address == addr) {
-				LOG_UI(m_services, L"rehook detected at 0x%llXhuanhangfu", addr);
-				if (!hr->IsPatchEntry()) {
+				LOG_UI(m_services, L"rehook detected at 0x%llX\n", addr);
+				if (hr->IsPatchEntry()) {
+					auto oriVec = HexToBytes(hr->GetPatchOriHex());
+					if (!oriVec.empty() && !HookCore::RemovePatch(m_pid, addr, m_services, oriVec.data(), (DWORD)oriVec.size())) {
+						MessageBox(L"Failed to remove patch before rehooking", L"Hook", MB_OK | MB_ICONERROR);
+						return false;
+					}
+				} else {
 					if (!HookCore::RemoveHook(m_pid, addr, m_services, hr->id, hr->ori_asm_code_len, (PVOID)hr->trampoline_pit)) {
 						MessageBox(L"Failed to remove hook before rehooking", L"Hook", MB_OK | MB_ICONERROR);
 						return false;

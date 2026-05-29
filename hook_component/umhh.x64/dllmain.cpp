@@ -835,7 +835,6 @@ OnProcessAttach(
 	_In_ PVOID ModuleHandle
 )
 {
-	DbgBreakPoint();
 	// add dll reference, so we can be unloaded by calling freelibrary
 	LdrAddRefDll(LDR_ADDREF_DLL_PIN, ModuleHandle);
 

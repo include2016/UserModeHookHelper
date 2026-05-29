@@ -32,6 +32,13 @@ namespace HookCore {
 	bool DisableHook(DWORD pid, ULONGLONG hook_address, IHookServices* services,
 		PVOID ori_asm_code_addr, DWORD ori_asm_code_len);
 	bool EnableHook(DWORD pid, ULONGLONG hook_address, IHookServices* services, PVOID trampoline_pit);
+	// Patch-specific: write arbitrary bytes to target address (for remove/disable/enable)
+	bool RemovePatch(DWORD pid, ULONGLONG address, IHookServices* services,
+		const BYTE* oriBytes, DWORD oriLen);
+	bool DisablePatch(DWORD pid, ULONGLONG address, IHookServices* services,
+		const BYTE* oriBytes, DWORD oriLen);
+	bool EnablePatch(DWORD pid, ULONGLONG address, IHookServices* services,
+		const BYTE* patchBytes, DWORD patchLen);
 
 	bool ConstructKernelTrampolineX64_Wrapper(IHookServices* services, PVOID hook_addr, PVOID target_base,
 		PVOID tramp_dll_base, DWORD stage_1_func_offset, DWORD stage_2_func_offset, DWORD64 hook_code_addr, DWORD* out_original_asm_len);

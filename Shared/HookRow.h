@@ -18,6 +18,22 @@ struct HookRow {
 	unsigned long long trampoline_pit;
 
 	bool IsPatchEntry() const { return id == -1; }
+
+	// For patch entries, expFunc format: "Patch:HEXBYTES|ORIHEX"
+	// GetPatchHex returns the patch hex (between "Patch:" and "|")
+	std::wstring GetPatchHex() const {
+		if (!IsPatchEntry() || expFunc.size() <= 6) return L"";
+		size_t bar = expFunc.find(L'|', 6);
+		if (bar == std::wstring::npos) return expFunc.substr(6);
+		return expFunc.substr(6, bar - 6);
+	}
+	// GetPatchOriHex returns the original bytes hex (after "|"), empty if not saved yet
+	std::wstring GetPatchOriHex() const {
+		if (!IsPatchEntry()) return L"";
+		size_t bar = expFunc.rfind(L'|');
+		if (bar == std::wstring::npos) return L"";
+		return expFunc.substr(bar + 1);
+	}
 };
 
 namespace HookRowUtils {

@@ -63,8 +63,10 @@ public:
     // Convert .patchseq to .hookseq file, returns the output .hookseq path
     static bool ConvertPatchSeqToHookSeq(const wchar_t* patchSeqPath, std::wstring& outHookSeqPath);
 
-    // Convert hex string (e.g. "31C0C3") to byte vector
-    static std::vector<BYTE> HexToBytes(const std::wstring& hex);
+    // Convert hex string to byte vector. Supports formats:
+    //   31C0C3 | \x31\xC0\xC3 | 0x31,0xC0,0xC3 | 31 C0 C3 | 0x31 0xC0 0xC3
+    // On invalid format, returns empty and sets outError if provided.
+    static std::vector<BYTE> HexToBytes(const std::wstring& hex, std::wstring* outError = nullptr);
 
 private:
     // Per-PID hook ID allocator: each PID gets its own 256-bit bitfield

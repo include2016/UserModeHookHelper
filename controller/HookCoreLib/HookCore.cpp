@@ -508,6 +508,82 @@ namespace HookCore {
 		}
 		return true;
 	}
+	// Write bytes back to target address for patch entries
+	static bool WritePatchBytesInternal(DWORD pid, ULONGLONG address, IHookServices* services,
+		const BYTE* bytes, DWORD len) {
+		if (!services) {
+			MessageBoxW(NULL, L"Fatal Error! services is NULL!", L"Hook", MB_OK | MB_ICONERROR);
+			return false;
+		}
+		if (!bytes || len == 0) {
+			LOG_CORE(services, L"WritePatchBytesInternal: no bytes to write (len=0).\n");
+			return false;
+		}
+		HANDLE hProc = OpenProcess(PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ | PROCESS_QUERY_INFORMATION, FALSE, pid);
+		if (!hProc) {
+			LOG_CORE(services, L"WritePatchBytesInternal: failed to open process pid=%u, error: 0x%x\n", pid, GetLastError());
+			return false;
+		}
+		DWORD old_protect = 0;
+		if (!::VirtualProtectEx(hProc, (LPVOID)address, len, PAGE_EXECUTE_READWRITE, &old_protect)) {
+			LOG_CORE(services, L"WritePatchBytesInternal: VirtualProtectEx failed, error: 0x%x\n", GetLastError());
+			CloseHandle(hProc);
+			return false;
+		}
+		SIZE_T written = 0;
+		if (!services->WriteProcessMemoryWrap(hProc, (LPVOID)address, bytes, len, &written)) {
+			LOG_CORE(services, L"WritePatchBytesInternal: WriteProcessMemoryWrap failed at 0x%llX, pid=%u\n", address, pid);
+			::VirtualProtectEx(hProc, (LPVOID)address, len, old_protect, &old_protect);
+			CloseHandle(hProc);
+			return false;
+		}
+		if (!::VirtualProtectEx(hProc, (LPVOID)address, len, old_protect, &old_protect)) {
+			LOG_CORE(services, L"WritePatchBytesInternal: VirtualProtectEx restore failed, error: 0x%x\n", GetLastError());
+		}
+		CloseHandle(hProc);
+		return true;
+	}
+
+	bool RemovePatch(DWORD pid, ULONGLONG address, IHookServices* services,
+		const BYTE* oriBytes, DWORD oriLen) {
+		if (!services) {
+			MessageBoxW(NULL, L"Fatal Error! services is NULL!", L"Hook", MB_OK | MB_ICONERROR);
+			return false;
+		}
+		services->LogCore(L"RemovePatch: restoring %u original bytes at 0x%llX (pid %u).\n", oriLen, address, pid);
+		if (!WritePatchBytesInternal(pid, address, services, oriBytes, oriLen)) {
+			LOG_CORE(services, L"RemovePatch: failed to write original bytes back\n");
+			return false;
+		}
+		return true;
+	}
+	bool DisablePatch(DWORD pid, ULONGLONG address, IHookServices* services,
+		const BYTE* oriBytes, DWORD oriLen) {
+		if (!services) {
+			MessageBoxW(NULL, L"Fatal Error! services is NULL!", L"Hook", MB_OK | MB_ICONERROR);
+			return false;
+		}
+		services->LogCore(L"DisablePatch: restoring %u original bytes at 0x%llX (pid %u).\n", oriLen, address, pid);
+		if (!WritePatchBytesInternal(pid, address, services, oriBytes, oriLen)) {
+			LOG_CORE(services, L"DisablePatch: failed to write original bytes back\n");
+			return false;
+		}
+		return true;
+	}
+	bool EnablePatch(DWORD pid, ULONGLONG address, IHookServices* services,
+		const BYTE* patchBytes, DWORD patchLen) {
+		if (!services) {
+			MessageBoxW(NULL, L"Fatal Error! services is NULL!", L"Hook", MB_OK | MB_ICONERROR);
+			return false;
+		}
+		services->LogCore(L"EnablePatch: writing %u patch bytes at 0x%llX (pid %u).\n", patchLen, address, pid);
+		if (!WritePatchBytesInternal(pid, address, services, patchBytes, patchLen)) {
+			LOG_CORE(services, L"EnablePatch: failed to write patch bytes\n");
+			return false;
+		}
+		return true;
+	}
+
 	// Decide minimal safe preserve length for FF25 (requires minNeeded bytes).
 	// buffer: bytes buffer (must contain at least enough bytes), bufSize its size,
 	// codeAddr: base address used for disassembly (affects resolved immediates) 
