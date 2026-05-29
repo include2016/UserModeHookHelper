@@ -20,6 +20,23 @@ shutdown /g /t 1 /f
 
 # 更新
 
+## 2026-05-29
+
+增加instant patch功能，自动patch目标代码
+
+功能演示：http://bilibili.com/video/BV1nLV86QEJR/
+
+patchseq示例：
+
+```
+[patch]
+module=Microsoft.VisualStudio.ProductKeyDialog.ni.dll
+offset=0x8a455
+patch=909090909090
+```
+
+在Microsoft.VisualStudio.ProductKeyDialog.ni.dll加载之后，将其0x8a455处偏移的代码修改成6个0x90
+
 ## 2026-05-22
 
 增加Lua hook模式，通过lua脚本来编写hook逻辑，并且支持热更新
