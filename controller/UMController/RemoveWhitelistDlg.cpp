@@ -1,4 +1,4 @@
-#include "pch.h"
+﻿#include "pch.h"
 #include "RemoveWhitelistDlg.h"
 #include "Resource.h"
 #include "Helper.h"
@@ -59,17 +59,17 @@ void CRemoveWhitelistDlg::OnOk() {
         size_t bytesLen = ntPath.size() * sizeof(wchar_t);
         unsigned long long hash = Helper::GetNtPathHash(bytes, bytesLen);
         if (!RegistryStore::RemoveWhitelistPath(ntPath)) {
-            app.GetETW().Log(L"RemoveWhitelistDlg: failed to remove path %s\n", ntPath.c_str());
+            app.GetETW().Log(L"[UMCtrl]     [E] RemoveWhitelistDlg: failed to remove path %s\n", ntPath.c_str());
             continue;
         }
         if (!RegistryStore::RemoveWhitelistHash(hash)) {
-            app.GetETW().Log(L"RemoveWhitelistDlg: failed to remove hash for %s\n", ntPath.c_str());
+            app.GetETW().Log(L"[UMCtrl]     [E] RemoveWhitelistDlg: failed to remove hash for %s\n", ntPath.c_str());
         }
     }
 
     // Restart ObCallback service to reload whitelist
     if (!Helper::UMHH_ObCallback_DriverCheck()) {
-        app.GetETW().Log(L"RemoveWhitelistDlg: UMHH_ObCallback_DriverCheck failed\n");
+        app.GetETW().Log(L"[UMCtrl]     [E] RemoveWhitelistDlg: UMHH_ObCallback_DriverCheck failed\n");
     }
 
     EndDialog(IDOK);

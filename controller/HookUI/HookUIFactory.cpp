@@ -18,7 +18,7 @@ HOOKUI_API BOOL WINAPI ShowHookDialog(HWND hParent, DWORD pid, const wchar_t* pr
                 static_cast<unsigned long>(pid), name.c_str(), static_cast<unsigned long>(err));
             services->Log(buf);
             if (err == 1814) {
-                LOG_UI(services, L"Resource load failure: confirm AFX_MANAGE_STATE present and HookUI.rc compiled into DLL.");
+                LOG_UI_E(services, L"Resource load failure: confirm AFX_MANAGE_STATE present and HookUI.rc compiled into DLL.");
             }
         }
         delete dlg;

@@ -1,4 +1,4 @@
-#include "pch.h"
+﻿#include "pch.h"
 #include "RegistryStore.h"
 #include "../../Shared/HookRow.h"
 #include <windows.h>
@@ -42,11 +42,11 @@ bool RegistryStore::ReadHookPaths(std::vector<std::wstring>& outPaths) {
 	if (r != ERROR_SUCCESS) {
 		RegCloseKey(hKey);
 		if (r == ERROR_FILE_NOT_FOUND) return true; // no value yet
-		app.GetETW().Log(L"RegistryStore::ReadHookPaths: RegQueryValueExW size failed (%d)\n", r);
+		app.GetETW().Log(L"[UMCtrl]     [E] RegistryStore::ReadHookPaths: RegQueryValueExW size failed (%d)\n", r);
 		return false;
 	}
 	if (type != REG_MULTI_SZ) {
-		app.GetETW().Log(L"RegistryStore::ReadHookPaths: unexpected value type %u\n", type);
+		app.GetETW().Log(L"[UMCtrl]     [E] RegistryStore::ReadHookPaths: unexpected value type %u\n", type);
 		RegCloseKey(hKey);
 		return false;
 	}
@@ -57,7 +57,7 @@ bool RegistryStore::ReadHookPaths(std::vector<std::wstring>& outPaths) {
 	r = RegQueryValueExW(hKey, VALUE_NAME, NULL, NULL, reinterpret_cast<LPBYTE>(buf.data()), &dataSize);
 	RegCloseKey(hKey);
 	if (r != ERROR_SUCCESS) {
-		app.GetETW().Log(L"RegistryStore::ReadHookPaths: RegQueryValueExW read failed (%d)\n", r);
+		app.GetETW().Log(L"[UMCtrl]     [E] RegistryStore::ReadHookPaths: RegQueryValueExW read failed (%d)\n", r);
 		return false;
 	}
 
@@ -89,14 +89,14 @@ bool RegistryStore::WriteHookPaths(const std::vector<std::wstring>& paths) {
 	DWORD disp = 0;
 	LONG r = RegCreateKeyExW(HKEY_LOCAL_MACHINE, REG_PERSIST_SUBKEY, 0, NULL, REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, &hKey, &disp);
 	if (r != ERROR_SUCCESS) {
-		app.GetETW().Log(L"RegistryStore::WriteHookPaths: RegCreateKeyExW failed (%d)\n", r);
+		app.GetETW().Log(L"[UMCtrl]     [E] RegistryStore::WriteHookPaths: RegCreateKeyExW failed (%d)\n", r);
 		return false;
 	}
 
 	LONG rr = RegSetValueExW(hKey, VALUE_NAME, 0, REG_MULTI_SZ, reinterpret_cast<const BYTE*>(buf.data()), (DWORD)(buf.size() * sizeof(wchar_t)));
 	RegCloseKey(hKey);
 	if (rr != ERROR_SUCCESS) {
-		app.GetETW().Log(L"RegistryStore::WriteHookPaths: RegSetValueExW failed (%d)\n", rr);
+		app.GetETW().Log(L"[UMCtrl]     [E] RegistryStore::WriteHookPaths: RegSetValueExW failed (%d)\n", rr);
 		return false;
 	}
 	return true;
@@ -140,11 +140,11 @@ bool RegistryStore::ReadCompositeProcCache(std::vector<std::tuple<DWORD, DWORD, 
 	if (r != ERROR_SUCCESS) {
 		RegCloseKey(hKey);
 		if (r == ERROR_FILE_NOT_FOUND) return true; // no value
-		app.GetETW().Log(L"RegistryStore::ReadCompositeProcCache: RegQueryValueExW size failed (%d)\n", r);
+		app.GetETW().Log(L"[UMCtrl]     [E] RegistryStore::ReadCompositeProcCache: RegQueryValueExW size failed (%d)\n", r);
 		return false;
 	}
 	if (type != REG_MULTI_SZ) {
-		app.GetETW().Log(L"RegistryStore::ReadCompositeProcCache: unexpected type %u\n", type);
+		app.GetETW().Log(L"[UMCtrl]     [E] RegistryStore::ReadCompositeProcCache: unexpected type %u\n", type);
 		RegCloseKey(hKey);
 		return false;
 	}
@@ -153,7 +153,7 @@ bool RegistryStore::ReadCompositeProcCache(std::vector<std::tuple<DWORD, DWORD, 
 	r = RegQueryValueExW(hKey, COMPOSITE_VALUE_NAME, NULL, NULL, reinterpret_cast<LPBYTE>(buf.data()), &dataSize);
 	RegCloseKey(hKey);
 	if (r != ERROR_SUCCESS) {
-		app.GetETW().Log(L"RegistryStore::ReadCompositeProcCache: read failed (%d)\n", r);
+		app.GetETW().Log(L"[UMCtrl]     [E] RegistryStore::ReadCompositeProcCache: read failed (%d)\n", r);
 		return false;
 	}
 	size_t idx = 0, wcCount = dataSize / sizeof(wchar_t);
@@ -204,13 +204,13 @@ bool RegistryStore::WriteCompositeProcCache(const std::vector<std::tuple<DWORD, 
 	HKEY hKey = NULL; DWORD disp = 0;
 	LONG r = RegCreateKeyExW(HKEY_LOCAL_MACHINE, REG_PERSIST_SUBKEY, 0, NULL, REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, &hKey, &disp);
 	if (r != ERROR_SUCCESS) {
-		app.GetETW().Log(L"RegistryStore::WriteCompositeProcCache: RegCreateKeyExW failed (%d)\n", r);
+		app.GetETW().Log(L"[UMCtrl]     [E] RegistryStore::WriteCompositeProcCache: RegCreateKeyExW failed (%d)\n", r);
 		return false;
 	}
 	LONG rr = RegSetValueExW(hKey, COMPOSITE_VALUE_NAME, 0, REG_MULTI_SZ, reinterpret_cast<const BYTE*>(buf.data()), (DWORD)(buf.size() * sizeof(wchar_t)));
 	RegCloseKey(hKey);
 	if (rr != ERROR_SUCCESS) {
-		app.GetETW().Log(L"RegistryStore::WriteCompositeProcCache: RegSetValueExW failed (%d)\n", rr);
+		app.GetETW().Log(L"[UMCtrl]     [E] RegistryStore::WriteCompositeProcCache: RegSetValueExW failed (%d)\n", rr);
 		return false;
 	}
 	return true;

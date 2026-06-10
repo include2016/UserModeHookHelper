@@ -51,7 +51,7 @@ void HookActions::HandleAddHook(CUMControllerDlg* dlg, Filter* filter, CListCtrl
 
     std::wstring ntPath;
     if (!Helper::ResolveProcessNtImagePath(pid, *filter, ntPath)) {
-		LOG_CTRL_ETW(L"OnAddHook: failed to resolve NT path for pid %u\n", pid);
+		LOG_CTRL_ETW_E(L"OnAddHook: failed to resolve NT path for pid %u\n", pid);
         MessageBox(NULL, L"Failed to resolve process image path. The process may have exited.", L"Add Hook", MB_OK | MB_ICONERROR);
         return;
     }
@@ -60,20 +60,20 @@ void HookActions::HandleAddHook(CUMControllerDlg* dlg, Filter* filter, CListCtrl
 
     bool ok = filter->FLTCOMM_AddHook(ntPath);
     if (!ok) {
-		LOG_CTRL_ETW(L"OnAddHook: FLTCOMM_AddHook failed for %s\n", ntPath.c_str());
+		LOG_CTRL_ETW_E(L"OnAddHook: FLTCOMM_AddHook failed for %s\n", ntPath.c_str());
         MessageBox(NULL, L"Failed to add hook entry in kernel.", L"Add Hook", MB_OK | MB_ICONERROR);
         return;
     }
 
     // Persist to registry. If persistence fails, attempt kernel rollback.
     if (!RegistryStore::AddPath(ntPath)) {
-        app.GetETW().Log(L"OnAddHook: RegistryStore::AddPath failed for %s - attempting rollback\n", ntPath.c_str());
+        app.GetETW().Log(L"[UMCtrl]     [E] OnAddHook: RegistryStore::AddPath failed for %s - attempting rollback\n", ntPath.c_str());
         // try rollback in kernel
         const UCHAR* b2 = reinterpret_cast<const UCHAR*>(ntPath.c_str());
         size_t bLen2 = ntPath.size() * sizeof(wchar_t);
         unsigned long long h2 = Helper::GetNtPathHash(b2, bLen2);
         if (!filter->FLTCOMM_RemoveHookByHash(h2)) {
-            app.GetETW().Log(L"OnAddHook: rollback RemoveHookByHash also failed for %s\n", ntPath.c_str());
+            app.GetETW().Log(L"[UMCtrl]     [E] OnAddHook: rollback RemoveHookByHash also failed for %s\n", ntPath.c_str());
         }
         MessageBox(NULL, L"Failed to persist hook entry to registry. The kernel entry has been rolled back.", L"Add Hook", MB_OK | MB_ICONERROR);
         return;
@@ -124,7 +124,7 @@ void HookActions::HandleRemoveHook(CUMControllerDlg* dlg, Filter* filter, CListC
     UNREFERENCED_PARAMETER(dlg);
     std::wstring ntPath;
     if (!Helper::ResolveProcessNtImagePath(pid, *filter, ntPath)) {
-		LOG_CTRL_ETW(L"OnRemoveHook: failed to resolve NT path for pid %u\n", pid);
+		LOG_CTRL_ETW_E(L"OnRemoveHook: failed to resolve NT path for pid %u\n", pid);
         MessageBox(NULL, L"Failed to resolve process image path. The process may have exited.", L"Remove Hook", MB_OK | MB_ICONERROR);
         return;
     }
@@ -137,7 +137,7 @@ void HookActions::HandleRemoveHook(CUMControllerDlg* dlg, Filter* filter, CListC
 
     bool ok = filter->FLTCOMM_RemoveHookByHash(hash);
     if (!ok) {
-		LOG_CTRL_ETW(L"OnRemoveHook: FLTCOMM_RemoveHookByHash failed for hash=0x%I64x\n", hash);
+		LOG_CTRL_ETW_E(L"OnRemoveHook: FLTCOMM_RemoveHookByHash failed for hash=0x%I64x\n", hash);
         MessageBox(NULL, L"Failed to remove hook from kernel.", L"Remove Hook", MB_OK | MB_ICONERROR);
         return;
     }
@@ -206,7 +206,7 @@ void HookActions::HandleInjectDll(CUMControllerDlg* dlg, Filter* filter, CListCt
         // Avoid UI popups on success; post an update that injection was requested
         ::PostMessage(app.GetHwnd(), WM_APP_UPDATE_PROCESS, (WPARAM)pid, (LPARAM)UPDATE_SOURCE_NOTIFY);
     } else {
-		LOG_CTRL_ETW(L"IPC_SendInject failed for pid %u dll %s\n", pid, szFile);
+		LOG_CTRL_ETW_E(L"IPC_SendInject failed for pid %u dll %s\n", pid, szFile);
         MessageBox(NULL, L"Failed to send injection request.", L"Inject DLL", MB_OK | MB_ICONERROR);
     }
 }

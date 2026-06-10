@@ -317,7 +317,7 @@ static bool SignalLuaEngineScript(IHookServices* services, DWORD pid, int hookId
     // Get LuaEngineIPCSlot export offset
     DWORD ipcSlotOffset = 0;
     if (!services->CheckExportFromFile(luaEngineFullPath.c_str(), LUA_ENGINE_PLACEHOLDER_EXP_FUNC, &ipcSlotOffset)) {
-        LOG_CTRL_INSHOOK(L"failed to get LuaEngineIPCSlot export offset\n");
+        LOG_CTRL_INSHOOK_E(L"failed to get LuaEngineIPCSlot export offset\n");
         return false;
     }
 
@@ -351,7 +351,7 @@ static bool SignalLuaEngineScript(IHookServices* services, DWORD pid, int hookId
 	ipcData[pos] = L'\0';
     HANDLE hProc = NULL;
     if (!services->GetHighAccessProcHandle(pid, &hProc) || !hProc) {
-        LOG_CTRL_INSHOOK(L"failed to get high access process handle, pid=%u\n", pid);
+        LOG_CTRL_INSHOOK_E(L"failed to get high access process handle, pid=%u\n", pid);
         return false;
     }
 
@@ -368,7 +368,7 @@ static bool SignalLuaEngineScript(IHookServices* services, DWORD pid, int hookId
     swprintf_s(eventName, LUA_ENGINE_UM_SIGNAL_EVENT, pid, hookId);
     HANDLE hEvent = OpenEventW(EVENT_MODIFY_STATE, FALSE, eventName);
     if (!hEvent) {
-        LOG_CTRL_INSHOOK(L"failed to open IPC event %s, err=%u\n", eventName, GetLastError());
+        LOG_CTRL_INSHOOK_E(L"failed to open IPC event %s, err=%u\n", eventName, GetLastError());
         return false;
     }
     SetEvent(hEvent);
@@ -398,7 +398,7 @@ void InstantHookManager::ListenerThreadImpl(ListenerContext* ctx) {
 	else {
 		ctx->hLoadNotify = CreateWorldAccessibleEventW(FALSE, FALSE, loadEventName);
 		if (!ctx->hLoadNotify) {
-			LOG_CTRL_INSHOOK(L"failed to create event=%s, Error=0x%x\n", loadEventName, GetLastError());
+			LOG_CTRL_INSHOOK_E(L"failed to create event=%s, Error=0x%x\n", loadEventName, GetLastError());
 			ctx->running = false;
 			return;
 		}
@@ -411,7 +411,7 @@ void InstantHookManager::ListenerThreadImpl(ListenerContext* ctx) {
 	else {
 		ctx->hHookNotify = CreateWorldAccessibleEventW(TRUE, FALSE, hookEventName);
 		if (!ctx->hHookNotify) {
-			LOG_CTRL_INSHOOK(L"failed to create event=%s, Error=0x%x\n", hookEventName, GetLastError());
+			LOG_CTRL_INSHOOK_E(L"failed to create event=%s, Error=0x%x\n", hookEventName, GetLastError());
 			CloseHandle(ctx->hLoadNotify);
 			ctx->hLoadNotify = NULL;
 			ctx->running = false;
@@ -436,7 +436,7 @@ void InstantHookManager::ListenerThreadImpl(ListenerContext* ctx) {
 		}
 
 		if (waitResult != WAIT_OBJECT_0) {
-			LOG_CTRL_INSHOOK(L"WaitForMultipleObjects failed, exiting listener thread\n");
+			LOG_CTRL_INSHOOK_E(L"WaitForMultipleObjects failed, exiting listener thread\n");
 			break;
 		}
 
@@ -463,7 +463,7 @@ void InstantHookManager::ListenerThreadImpl(ListenerContext* ctx) {
 		}
 
 		if (pid == 0) {
-			LOG_CTRL_INSHOOK(L"failed to get PID from hook event file\n");
+			LOG_CTRL_INSHOOK_E(L"failed to get PID from hook event file\n");
 			SetEvent(ctx->hHookNotify);
 			continue;  // Continue to next iteration
 		}
@@ -476,7 +476,7 @@ void InstantHookManager::ListenerThreadImpl(ListenerContext* ctx) {
 		// get module base (common to all modes)
 		DWORD64 moduleBase = 0;
 		if (!m_services->GetModuleBase(pid, ctx->target.module.c_str(), &moduleBase) || moduleBase == 0) {
-			LOG_CTRL_INSHOOK(L"failed to get target module base\n");
+			LOG_CTRL_INSHOOK_E(L"failed to get target module base\n");
 			SetEvent(ctx->hHookNotify);
 			continue;
 		}
@@ -492,10 +492,10 @@ void InstantHookManager::ListenerThreadImpl(ListenerContext* ctx) {
 			std::vector<BYTE> patchBytes = HexToBytes(hexStr, &parseError);
 			if (patchBytes.empty()) {
 				if (!parseError.empty()) {
-					LOG_CTRL_INSHOOK(L"patch mode: %s (input: %s)huanhangfu", parseError.c_str(), hexStr.c_str());
+					LOG_CTRL_INSHOOK_E(L"patch mode: %s (input: %s)huanhangfu", parseError.c_str(), hexStr.c_str());
 					MessageBoxW(NULL, parseError.c_str(), L"Patch Format Error", MB_OK | MB_ICONERROR);
 				} else {
-					LOG_CTRL_INSHOOK(L"patch mode: empty byte sequence from export name: %shuanhangfu", ctx->target.exportName.c_str());
+					LOG_CTRL_INSHOOK_E(L"patch mode: empty byte sequence from export name: %shuanhangfu", ctx->target.exportName.c_str());
 				}
 				SetEvent(ctx->hHookNotify);
 				continue;
@@ -503,7 +503,7 @@ void InstantHookManager::ListenerThreadImpl(ListenerContext* ctx) {
 
 			HANDLE hProc = NULL;
 			if (!m_services->GetHighAccessProcHandle(pid, &hProc) || !hProc) {
-				LOG_CTRL_INSHOOK(L"patch mode: failed to get process handle, pid=%u\n", pid);
+				LOG_CTRL_INSHOOK_E(L"patch mode: failed to get process handle, pid=%u\n", pid);
 				SetEvent(ctx->hHookNotify);
 				continue;
 			}
@@ -522,7 +522,7 @@ void InstantHookManager::ListenerThreadImpl(ListenerContext* ctx) {
 				}
 			}
 			if (!oriReadOk) {
-				LOG_CTRL_INSHOOK(L"patch mode: failed to read original bytes at 0x%llX, pid=%u\n", targetAddress, pid);
+				LOG_CTRL_INSHOOK_E(L"patch mode: failed to read original bytes at 0x%llX, pid=%u\n", targetAddress, pid);
 			}
 
 			DWORD oldProtect = 0;
@@ -534,11 +534,11 @@ void InstantHookManager::ListenerThreadImpl(ListenerContext* ctx) {
 					patchOk = true;
 				}
 				else {
-					LOG_CTRL_INSHOOK(L"patch mode: WriteProcessMemory failed at 0x%llX, pid=%u\n", targetAddress, pid);
+					LOG_CTRL_INSHOOK_E(L"patch mode: WriteProcessMemory failed at 0x%llX, pid=%u\n", targetAddress, pid);
 				}
 			}
 			else {
-				LOG_CTRL_INSHOOK(L"patch mode: VirtualProtectEx failed at 0x%llX, err=%u\n", targetAddress, GetLastError());
+				LOG_CTRL_INSHOOK_E(L"patch mode: VirtualProtectEx failed at 0x%llX, err=%u\n", targetAddress, GetLastError());
 			}
 			CloseHandle(hProc);
 
@@ -575,7 +575,7 @@ void InstantHookManager::ListenerThreadImpl(ListenerContext* ctx) {
 					rows.push_back(row);
 
 					if (!m_services->SaveProcHookList(pid, createTime.dwHighDateTime, createTime.dwLowDateTime, rows)) {
-						LOG_CTRL_INSHOOK(L"patch mode: failed to persist patch info to registry for pid=%u\n", pid);
+						LOG_CTRL_INSHOOK_E(L"patch mode: failed to persist patch info to registry for pid=%u\n", pid);
 					}
 					else {
 						LOG_CTRL_INSHOOK(L"patch info persisted to registry: pid=%u, address=0x%llx\n", pid, targetAddress);
@@ -620,14 +620,14 @@ void InstantHookManager::ListenerThreadImpl(ListenerContext* ctx) {
 						Sleep(100);
 					}
 					if (!loaded) {
-						LOG_CTRL_INSHOOK(L"LuaEngine %s NOT detected within 5s after injection (pid %u)\n", is64 ? LUA_ENGINE_DLL_X64 : LUA_ENGINE_DLL_Win32, pid);
+						LOG_CTRL_INSHOOK_E(L"LuaEngine %s NOT detected within 5s after injection (pid %u)\n", is64 ? LUA_ENGINE_DLL_X64 : LUA_ENGINE_DLL_Win32, pid);
 						SetEvent(ctx->hHookNotify);
 						continue;
 					}
 					LOG_CTRL_INSHOOK(L"LuaEngine %s detected at 0x%llX after injection (pid %u)\n", is64 ? LUA_ENGINE_DLL_X64 : LUA_ENGINE_DLL_Win32, luaEngineBase, pid);
 				}
 				else {
-					LOG_CTRL_INSHOOK(L"failed to inject %s (pid %u), aborting\n", is64 ? LUA_ENGINE_DLL_X64 : LUA_ENGINE_DLL_Win32, pid);
+					LOG_CTRL_INSHOOK_E(L"failed to inject %s (pid %u), aborting\n", is64 ? LUA_ENGINE_DLL_X64 : LUA_ENGINE_DLL_Win32, pid);
 					SetEvent(ctx->hHookNotify);
 					continue;
 				}
@@ -641,7 +641,7 @@ void InstantHookManager::ListenerThreadImpl(ListenerContext* ctx) {
 			DWORD dispatchOffset = 0;
 			const char* dispatchName = is64 ? LUA_ENGINE_EXPORT_X64 : LUA_ENGINE_EXPORT_Win32;
 			if (!m_services->CheckExportFromFile(luaEngineFullPath2.c_str(), dispatchName, &dispatchOffset)) {
-				LOG_CTRL_INSHOOK(L"failed to get LuaEngine dispatch export: %s\n", is64 ? WIDEN(LUA_ENGINE_EXPORT_X64) : WIDEN(LUA_ENGINE_EXPORT_Win32));
+				LOG_CTRL_INSHOOK_E(L"failed to get LuaEngine dispatch export: %s\n", is64 ? WIDEN(LUA_ENGINE_EXPORT_X64) : WIDEN(LUA_ENGINE_EXPORT_Win32));
 				SetEvent(ctx->hHookNotify);
 				continue;
 			}
@@ -667,7 +667,7 @@ void InstantHookManager::ListenerThreadImpl(ListenerContext* ctx) {
 			}
 
 			if (hookDllBase == 0) {
-				LOG_CTRL_INSHOOK(L"failed to get hook code dll base\n");
+				LOG_CTRL_INSHOOK_E(L"failed to get hook code dll base\n");
 				SetEvent(ctx->hHookNotify);
 				continue;
 			}
@@ -675,7 +675,7 @@ void InstantHookManager::ListenerThreadImpl(ListenerContext* ctx) {
 			DWORD hookCodeOffset = 0;
 			CT2A exportNameA(ctx->target.exportName.c_str());
 			if (!m_services->CheckExportFromFile(ctx->target.dllPath.c_str(), exportNameA, &hookCodeOffset)) {
-				LOG_CTRL_INSHOOK(L"failed to get target export function=%s of target dll %s\n",
+				LOG_CTRL_INSHOOK_E(L"failed to get target export function=%s of target dll %s\n",
 					ctx->target.exportName.c_str(), ctx->target.dllPath.c_str());
 				SetEvent(ctx->hHookNotify);
 				continue;
@@ -690,7 +690,7 @@ void InstantHookManager::ListenerThreadImpl(ListenerContext* ctx) {
 		int hookId = AllocHookId(pid);
 
 		if (hookId == -1) {
-			LOG_CTRL_INSHOOK(L"there is no enough hookid\n");
+			LOG_CTRL_INSHOOK_E(L"there is no enough hookid\n");
 			SetEvent(ctx->hHookNotify);
 			continue;  // Continue to next iteration
 		}
@@ -711,7 +711,7 @@ void InstantHookManager::ListenerThreadImpl(ListenerContext* ctx) {
 		if (!HookCore::ApplyHook(pid, targetAddress, m_services, hookFunctionAddress, hookId, hook_mode, &oriLen, &trampoline, &oriAsmAddr)) {
 			// release hook ID
 			ReleaseHookId(pid, hookId);
-			LOG_CTRL_INSHOOK(L"ApplyHook failed for pid=%u\n", pid);
+			LOG_CTRL_INSHOOK_E(L"ApplyHook failed for pid=%u\n", pid);
 			SetEvent(ctx->hHookNotify);
 			continue;  // Continue to next iteration
 		}
@@ -737,7 +737,7 @@ void InstantHookManager::ListenerThreadImpl(ListenerContext* ctx) {
 				rows.push_back(row);
 
 				if (!m_services->SaveProcHookList(pid, createTime.dwHighDateTime, createTime.dwLowDateTime, rows)) {
-					LOG_CTRL_INSHOOK(L"failed to persist hook info to registry for pid=%u, hookId=%d\n", pid, hookId);
+					LOG_CTRL_INSHOOK_E(L"failed to persist hook info to registry for pid=%u, hookId=%d\n", pid, hookId);
 				}
 				else {
 					LOG_CTRL_INSHOOK(L"hook info persisted to registry: pid=%u, hookId=%d, address=0x%llx\n", pid, hookId, targetAddress);
@@ -746,7 +746,7 @@ void InstantHookManager::ListenerThreadImpl(ListenerContext* ctx) {
 			CloseHandle(hProc);
 		}
 		else {
-			LOG_CTRL_INSHOOK(L"failed to open process for GetProcessTimes: pid=%u, Error=0x%x\n", pid, GetLastError());
+			LOG_CTRL_INSHOOK_E(L"failed to open process for GetProcessTimes: pid=%u, Error=0x%x\n", pid, GetLastError());
 		}
 
 		// Signal HookNotify so handler code in UMHH.dll can continue

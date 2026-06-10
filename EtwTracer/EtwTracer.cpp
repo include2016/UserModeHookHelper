@@ -11,6 +11,35 @@
 #include <condition_variable>
 #include <atomic>
 
+// Console color helpers for error highlighting
+namespace ConsoleColor {
+    HANDLE gStdOut = NULL;
+    WORD gDefaultAttr = 0;
+
+    void Init() {
+        gStdOut = GetStdHandle(STD_OUTPUT_HANDLE);
+        if (gStdOut) {
+            CONSOLE_SCREEN_BUFFER_INFO csbi = {};
+            if (GetConsoleScreenBufferInfo(gStdOut, &csbi)) {
+                gDefaultAttr = csbi.wAttributes;
+            }
+        }
+    }
+
+    void SetError() {
+        if (gStdOut) {
+            // Red background, bright white text
+            SetConsoleTextAttribute(gStdOut, BACKGROUND_RED | FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+        }
+    }
+
+    void Reset() {
+        if (gStdOut && gDefaultAttr) {
+            SetConsoleTextAttribute(gStdOut, gDefaultAttr);
+        }
+    }
+}
+
 // Simple asynchronous file logger for ETWTracer.
 // Writes each formatted line (same as console output) to a UTF-8 file without
 // blocking the ETW callback thread.
@@ -156,8 +185,11 @@ VOID WINAPI TraceEventCallback(_In_ PEVENT_RECORD EventRecord)
         EventRecord->EventHeader.ProcessId,
         EventRecord->EventHeader.ThreadId,
         cleaned);
-    // Console output immediate
+    // Console output with error highlighting
+    bool isError = (wcsstr(cleaned, L"[E]") != NULL);
+    if (isError) ConsoleColor::SetError();
     wprintf(L"%s", line);
+    if (isError) ConsoleColor::Reset();
     // Queue for file persistence (minus trailing newline to let writer add one)
     std::wstring toQueue(line);
     if (!toQueue.empty() && toQueue.back() == L'\n') toQueue.pop_back();
@@ -166,6 +198,8 @@ VOID WINAPI TraceEventCallback(_In_ PEVENT_RECORD EventRecord)
 void CreateWaitSignalThread();
 
 int wmain() {
+	// Initialize console color attributes for error highlighting
+	ConsoleColor::Init();
 	// Log beside EtwTracer.exe with timestamped filename EtwTracer_YYYYMMDD_HHMMSS.log
 	wchar_t exePath[MAX_PATH] = { 0 }; exePath[0]=0;
 	GetModuleFileNameW(NULL, exePath, _countof(exePath));
@@ -262,6 +296,32 @@ TraceStart(
 	ErrorCode = StartTrace(&TraceSessionHandle, SessionName, EventTraceProperties);
 	if (ErrorCode != ERROR_SUCCESS)
 	{
+		// If StartTrace failed due to a stale session, clean up and auto-restart
+		// (inspired by eventConsumer's auto-restart mechanism)
+		if (ErrorCode == ERROR_ALREADY_EXISTS || ErrorCode == ERROR_ACCESS_DENIED) {
+			printf("StartTrace failed with %08x — stopping stale session and relaunching\n", ErrorCode);
+			// Stop the stale session
+			BYTE stopBuf[sizeof(EVENT_TRACE_PROPERTIES) + 4096];
+			RtlZeroMemory(stopBuf, sizeof(stopBuf));
+			PEVENT_TRACE_PROPERTIES stopProps = (PEVENT_TRACE_PROPERTIES)stopBuf;
+			stopProps->Wnode.BufferSize = sizeof(stopBuf);
+			StopTrace(0, SessionName, stopProps);
+			// Relaunch self and exit current process
+			WCHAR exePath[MAX_PATH];
+			GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+			STARTUPINFOW si = { sizeof(si) };
+			si.dwFlags = STARTF_USESHOWWINDOW;
+			si.wShowWindow = SW_SHOW;
+			PROCESS_INFORMATION pi = {};
+			if (CreateProcessW(nullptr, exePath, nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
+				CloseHandle(pi.hProcess);
+				CloseHandle(pi.hThread);
+			}
+			// Clean up and exit — the new instance takes over
+			if (TraceHandle) CloseTrace(TraceHandle);
+			StopFileLogging();
+			return 0;
+		}
 		goto Exit;
 	}
 
@@ -272,7 +332,28 @@ TraceStart(
 	ErrorCode = EnableTrace(TRUE, 0, 0, &ProviderGUID, TraceSessionHandle);
 	if (ErrorCode != ERROR_SUCCESS)
 	{
-		goto Exit;
+		// If EnableTrace failed, stop stale session and auto-restart
+		// (inspired by eventConsumer's auto-restart mechanism)
+		printf("EnableTrace failed with %08x — stopping session and relaunching\n", ErrorCode);
+		BYTE stopBuf[sizeof(EVENT_TRACE_PROPERTIES) + 4096];
+		RtlZeroMemory(stopBuf, sizeof(stopBuf));
+		PEVENT_TRACE_PROPERTIES stopProps = (PEVENT_TRACE_PROPERTIES)stopBuf;
+		stopProps->Wnode.BufferSize = sizeof(stopBuf);
+		StopTrace(TraceSessionHandle, SessionName, stopProps);
+		// Relaunch self
+		WCHAR exePath[MAX_PATH];
+		GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+		STARTUPINFOW si = { sizeof(si) };
+		si.dwFlags = STARTF_USESHOWWINDOW;
+		si.wShowWindow = SW_SHOW;
+		PROCESS_INFORMATION pi = {};
+		if (CreateProcessW(nullptr, exePath, nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
+			CloseHandle(pi.hProcess);
+			CloseHandle(pi.hThread);
+		}
+		if (TraceHandle) CloseTrace(TraceHandle);
+		StopFileLogging();
+		return 0;
 	}
 
 	// Signal the ready event so the parent UI knows the tracer is up.

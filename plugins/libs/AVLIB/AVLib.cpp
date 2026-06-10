@@ -1,4 +1,4 @@
-// AVLib.cpp : Defines the functions for the static library.
+﻿// AVLib.cpp : Defines the functions for the static library.
 //
 
 #include "pch.h"
@@ -25,7 +25,7 @@ namespace AVLIB {
 		WSADATA wsaData;
 		int result = WSAStartup(MAKEWORD(2, 2), &wsaData);
 		if (result != 0) {
-			LOG_AV(g_hookServices, L"WSAStartup failed, Error=0x%X\n", result);
+			LOG_AV_E(g_hookServices, L"WSAStartup failed, Error=0x%X\n", result);
 			return;
 		}
 		winsockInitialized = true;
@@ -39,7 +39,7 @@ namespace AVLIB {
 		const std::string portStr = std::to_string(port);
 		result = getaddrinfo(host.c_str(), portStr.c_str(), &hints, &resolved);
 		if (result != 0) {
-			LOG_AV(g_hookServices, L"Address resolution failed, Host=%s, Port=%u, Error=0x%X\n", host.c_str(), port, result);
+			LOG_AV_E(g_hookServices, L"Address resolution failed, Host=%s, Port=%u, Error=0x%X\n", host.c_str(), port, result);
 			WSACleanup();
 			winsockInitialized = false;
 			return;
@@ -62,7 +62,7 @@ namespace AVLIB {
 		freeaddrinfo(resolved);
 
 		if (sockfd == INVALID_SOCKET) {
-			LOG_AV(g_hookServices, L"Connection failed, Host=%s, Port=%u, Error=0x%X\n", host.c_str(), port, WSAGetLastError);
+			LOG_AV_E(g_hookServices, L"Connection failed, Host=%s, Port=%u, Error=0x%X\n", host.c_str(), port, WSAGetLastError);
 
 			WSACleanup();
 			winsockInitialized = false;

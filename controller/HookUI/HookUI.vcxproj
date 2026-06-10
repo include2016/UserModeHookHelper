@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -114,7 +114,13 @@
     <Link>
       <AdditionalDependencies>$(ProjectDir)..\..\$(Platform)\$(Configuration)\ProcessHackerLib.lib;</AdditionalDependencies>
     </Link>
-  </ItemDefinitionGroup>
+      <PostBuildEvent>
+      <Command>if not exist "$(SolutionDir)product" mkdir "$(SolutionDir)product"
+if not exist "$(SolutionDir)product\pdb" mkdir "$(SolutionDir)product\pdb"
+copy /Y "$(TargetPath)" "$(SolutionDir)product\"
+copy /Y "$(TargetDir)$(TargetName).pdb" "$(SolutionDir)product\pdb\"</Command>
+    </PostBuildEvent>
+</ItemDefinitionGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />
 </Project>

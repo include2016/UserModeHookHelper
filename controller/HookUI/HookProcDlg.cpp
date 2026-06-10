@@ -300,7 +300,7 @@ RollBack:
 		for (int i = 0; i < m_HookList.GetItemCount(); ++i) {
 			HookRow* hr = reinterpret_cast<HookRow*>(m_HookList.GetItemData(i));
 			if (!hr) {
-				LOG_UI(m_services, L"weird, hr can not be NULL during iteration\n");
+				LOG_UI_E(m_services, L"weird, hr can not be NULL during iteration\n");
 				continue;
 			}
 		 
@@ -343,7 +343,7 @@ RollBack:
 						if (hr->IsPatchEntry()) {
 							auto oriVec = HexToBytes(hr->GetPatchOriHex());
 							if (!oriVec.empty() && !HookCore::RemovePatch(m_pid, hr->address, m_services, oriVec.data(), (DWORD)oriVec.size())) {
-								LOG_UI(m_services, L"failed to remove patch at Addr=0x%p\n", hr->address);
+								LOG_UI_E(m_services, L"failed to remove patch at Addr=0x%p\n", hr->address);
 								MessageBox(L"Failed to remove patch before rehooking the same address", L"Hook",
 									MB_OK | MB_ICONERROR);
 								return;
@@ -351,7 +351,7 @@ RollBack:
 						} else {
 							if (!HookCore::RemoveHook(m_pid, hr->address, m_services, hr->id,
 								hr->ori_asm_code_len, (PVOID)hr->trampoline_pit)) {
-								LOG_UI(m_services, L"failed to remove hook at Addr=0x%p\n", hr->address);
+								LOG_UI_E(m_services, L"failed to remove hook at Addr=0x%p\n", hr->address);
 								MessageBox(L"Failed to remove hook first before rehooking the same address", L"Hook",
 									MB_OK | MB_ICONERROR);
 								return;
@@ -464,7 +464,7 @@ void HookProcDlg::OnBnClickedReloadLua() {
 		// Write IPC data to target process
 		HANDLE hProc = NULL;
 		if (!m_services->GetHighAccessProcHandle(m_pid, &hProc) || !hProc) {
-			LOG_UI(m_services, L"ReloadLua: failed to get high access handle, pid=%u\n", m_pid);
+			LOG_UI_E(m_services, L"ReloadLua: failed to get high access handle, pid=%u\n", m_pid);
 			failed++;
 			continue;
 		}
@@ -480,7 +480,7 @@ void HookProcDlg::OnBnClickedReloadLua() {
 		CloseHandle(hProc);
 
 		if (!writeOk) {
-			LOG_UI(m_services, L"ReloadLua: failed to write IPC data for hookId=%d\n", lh.hookId);
+			LOG_UI_E(m_services, L"ReloadLua: failed to write IPC data for hookId=%d\n", lh.hookId);
 			failed++;
 			continue;
 		}
@@ -490,7 +490,7 @@ void HookProcDlg::OnBnClickedReloadLua() {
 		swprintf_s(eventName, LUA_ENGINE_UM_SIGNAL_EVENT, m_pid, lh.hookId);
 		HANDLE hEvent = OpenEventW(EVENT_MODIFY_STATE, FALSE, eventName);
 		if (!hEvent) {
-			LOG_UI(m_services, L"ReloadLua: failed to open signal event %s, err=%u\n", eventName, GetLastError());
+			LOG_UI_E(m_services, L"ReloadLua: failed to open signal event %s, err=%u\n", eventName, GetLastError());
 			failed++;
 			continue;
 		}
@@ -750,7 +750,7 @@ void HookProcDlg::PopulateModuleList() {
 	PPH_MODULE_LIST_NODE head = NULL;
 	LONG status = (LONG)(ULONG_PTR)PHLIB::PhBuildModuleList((void*)(ULONG_PTR)m_pid, (void*)(ULONG_PTR)&head);
 	if (status != 0) {
-		LOG_UI(m_services, L"failed to call PHLIB::PhBuildModuleList, Status=0x%x\n", status);
+		LOG_UI_E(m_services, L"failed to call PHLIB::PhBuildModuleList, Status=0x%x\n", status);
 		MessageBoxW(L"failed to call PHLIB::PhBuildModuleList", L"HookDlg", MB_ICONERROR);
 		return;
 	}
@@ -909,13 +909,13 @@ void HookProcDlg::OnHookMenuDisable() {
 	if (hr->IsPatchEntry()) {
 		auto oriVec = HexToBytes(hr->GetPatchOriHex());
 		if (oriVec.empty() || !HookCore::DisablePatch(m_pid, hr->address, m_services, oriVec.data(), (DWORD)oriVec.size())) {
-			LOG_UI(m_services, L"failed to call HookCore::DisablePatch\n");
+			LOG_UI_E(m_services, L"failed to call HookCore::DisablePatch\n");
 			MessageBoxW(L"failed to call HookCore::DisablePatch\n", L"Hook", MB_OK | MB_ICONERROR);
 			return;
 		}
 	} else {
 		if (!HookCore::DisableHook(m_pid, hr->address, m_services, (PVOID)hr->ori_asm_code_addr, hr->ori_asm_code_len)) {
-			LOG_UI(m_services, L"failed to call HookCore::DisableHook\n");
+			LOG_UI_E(m_services, L"failed to call HookCore::DisableHook\n");
 			MessageBoxW(L"failed to call HookCore::DisableHook\n", L"Hook", MB_OK | MB_ICONERROR);
 			return;
 		}
@@ -952,7 +952,7 @@ void HookProcDlg::OnHookMenuEnable() {
 	if (hr->IsPatchEntry()) {
 		auto patchVec = HexToBytes(hr->GetPatchHex());
 		if (patchVec.empty() || !HookCore::EnablePatch(m_pid, hr->address, m_services, patchVec.data(), (DWORD)patchVec.size())) {
-			LOG_UI(m_services, L"failed to call HookCore::EnablePatch\n");
+			LOG_UI_E(m_services, L"failed to call HookCore::EnablePatch\n");
 			MessageBoxW(L"failed to call HookCore::EnablePatch\n", L"Hook", MB_OK | MB_ICONERROR);
 			return;
 		}
@@ -986,14 +986,14 @@ void HookProcDlg::OnHookMenuRemove() {
 		auto oriVec = HexToBytes(hr->GetPatchOriHex());
 		if (!oriVec.empty() && !HookCore::RemovePatch(m_pid, hr->address, m_services, oriVec.data(), (DWORD)oriVec.size())) {
 			if (m_services)
-				LOG_UI(m_services, L"failed to call HookCore::RemovePatch\n");
+				LOG_UI_E(m_services, L"failed to call HookCore::RemovePatch\n");
 			MessageBoxW(L"failed to call HookCore::RemovePatch\n", L"Hook", MB_OK | MB_ICONERROR);
 			return;
 		}
 	} else {
 		if (!HookCore::RemoveHook(m_pid, hr->address, m_services, hr->id, hr->ori_asm_code_len, (PVOID)hr->trampoline_pit)) {
 			if (m_services)
-				LOG_UI(m_services, L"failed to call HookCore::RemoveHook\n");
+				LOG_UI_E(m_services, L"failed to call HookCore::RemoveHook\n");
 			MessageBoxW(L"failed to call HookCore::RemoveHook\n", L"Hook", MB_OK | MB_ICONERROR);
 			return;
 		}
@@ -1061,17 +1061,17 @@ bool HookProcDlg::HookCommonCode(DWORD64 module_base, DWORD module_offset,std::w
 	char ansi_exportToCheck[MAX_PATH] = { 0 };
 	DWORD hook_code_offset = 0;
 	if (!m_services->ConvertWcharToChar(export_func_name.c_str(), ansi_exportToCheck, MAX_PATH)) {
-		LOG_UI(m_services, L"failed to call ConvertWcharToChar\n");
+		LOG_UI_E(m_services, L"failed to call ConvertWcharToChar\n");
 		MessageBox(L"failed to call ConvertWcharToChar", L"Hook", MB_OK | MB_ICONERROR);
 		return false;
 	}
 	if (!m_services->CheckExportFromFile(hook_code_path.c_str(), ansi_exportToCheck, &hook_code_offset)) {
-		LOG_UI(m_services, L"failed to call CheckExportFromFile, PE_Path=%s\n", hook_code_path.c_str());
+		LOG_UI_E(m_services, L"failed to call CheckExportFromFile, PE_Path=%s\n", hook_code_path.c_str());
 		MessageBox(L"failed to call CheckExportFromFile", L"Hook", MB_OK | MB_ICONERROR);
 		return false;
 	}
 	if (!hook_code_offset) {
-		LOG_UI(m_services, L"failed to get required export function: %s\n", export_func_name.c_str());
+		LOG_UI_E(m_services, L"failed to get required export function: %s\n", export_func_name.c_str());
 		MessageBox(L"failed to get required export function from HookCode dll", L"Hook", MB_OK | MB_ICONERROR);
 		return false;
 	}
@@ -1103,7 +1103,7 @@ bool HookProcDlg::HookCommonCode(DWORD64 module_base, DWORD module_offset,std::w
 		if (!CreateDirectoryW(folder.c_str(), NULL)) {
 			DWORD err = GetLastError();
 			if (err != ERROR_ALREADY_EXISTS) {
-				LOG_UI(m_services, L"CreateDirectoryW failed for %s err=%u\n", folder.c_str(), err);
+				LOG_UI_E(m_services, L"CreateDirectoryW failed for %s err=%u\n", folder.c_str(), err);
 			}
 		}
 		// Build timestamped filename
@@ -1123,7 +1123,7 @@ bool HookProcDlg::HookCommonCode(DWORD64 module_base, DWORD module_offset,std::w
 		}
 		else {
 			DWORD err = GetLastError();
-			LOG_UI(m_services, L"CopyFileW failed src=%s dst=%s err=%u - falling back to original\n", hook_code_path.c_str(), dest.c_str(), err);
+			LOG_UI_E(m_services, L"CopyFileW failed src=%s dst=%s err=%u - falling back to original\n", hook_code_path.c_str(), dest.c_str(), err);
 			return false;
 			// keep pathToInject as original selectedPath
 		}
@@ -1132,7 +1132,7 @@ bool HookProcDlg::HookCommonCode(DWORD64 module_base, DWORD module_offset,std::w
 	// Signal master DLL (via IHookServices) to load the selected DLL inside target process
 	if (m_services) {
 		if (!m_services->InjectTrampoline(m_pid, pathToInject.c_str())) {
-			LOG_UI(m_services, L"InjectTrampoline failed for pid=%u path=%s\n", m_pid, pathToInject.c_str());
+			LOG_UI_E(m_services, L"InjectTrampoline failed for pid=%u path=%s\n", m_pid, pathToInject.c_str());
 			MessageBox(L"Failed to request master DLL to load selected DLL. Check logs.", L"Hook", MB_OK | MB_ICONERROR);
 			return false;
 		}
@@ -1145,14 +1145,14 @@ bool HookProcDlg::HookCommonCode(DWORD64 module_base, DWORD module_offset,std::w
 	
 		for (int iter = 0; iter < maxIterations && !hook_code_dll_base; ++iter) {
 			if(!m_services->GetModuleBase(m_pid, temp_hook_code_dll_name, &hook_code_dll_base)){
-				LOG_UI(m_services, L"faile to call GetModuleBase, Pid=%u, Module=%s\n", m_pid, temp_hook_code_dll_name);
+				LOG_UI_E(m_services, L"faile to call GetModuleBase, Pid=%u, Module=%s\n", m_pid, temp_hook_code_dll_name);
 				MessageBox(L"faile to call GetModuleBase", L"Hook", MB_OK | MB_ICONERROR);
 				return false;
 			}
 			if (!hook_code_dll_base) Sleep(100);
 		}
 		if (!hook_code_dll_base) {
-			LOG_UI(m_services, L"faile to load hookcode dll: %s\n", hook_code_path.c_str());
+			LOG_UI_E(m_services, L"faile to load hookcode dll: %s\n", hook_code_path.c_str());
 			MessageBox(L"faile to load hookcode dll", L"Hook", MB_OK | MB_ICONERROR);
 			return false;
 		}
@@ -1163,7 +1163,7 @@ bool HookProcDlg::HookCommonCode(DWORD64 module_base, DWORD module_offset,std::w
 	for (int i = 0; i < m_HookList.GetItemCount(); ++i) {
 		HookRow* hr = reinterpret_cast<HookRow*>(m_HookList.GetItemData(i));
 		if (!hr) {
-			LOG_UI(m_services, L"weird, hr can not be NULL during iteration\n");
+			LOG_UI_E(m_services, L"weird, hr can not be NULL during iteration\n");
 			continue;
 		}
 		if (hr->address == addr) {
@@ -1172,13 +1172,13 @@ bool HookProcDlg::HookCommonCode(DWORD64 module_base, DWORD module_offset,std::w
 				if (hr->IsPatchEntry()) {
 					auto oriVec = HexToBytes(hr->GetPatchOriHex());
 					if (!oriVec.empty() && !HookCore::RemovePatch(m_pid, addr, m_services, oriVec.data(), (DWORD)oriVec.size())) {
-						LOG_UI(m_services, L"failed to remove patch first before rehooking the same address\n");
+						LOG_UI_E(m_services, L"failed to remove patch first before rehooking the same address\n");
 						MessageBox(L"Failed to remove patch first before rehooking the same address", L"Hook", MB_OK | MB_ICONERROR);
 						return false;
 					}
 				} else {
 					if (!HookCore::RemoveHook(m_pid, addr, m_services, hr->id, hr->ori_asm_code_len, (PVOID)hr->trampoline_pit)) {
-						LOG_UI(m_services, L"failed to remove hook first before rehooking the same address\n");
+						LOG_UI_E(m_services, L"failed to remove hook first before rehooking the same address\n");
 						MessageBox(L"Failed to remove hook first before rehooking the same address", L"Hook", MB_OK | MB_ICONERROR);
 						return false;
 					}
@@ -1249,7 +1249,7 @@ bool HookProcDlg::HookCommonCode(DWORD64 module_base, DWORD module_offset,std::w
 		return true;
 	}
 	else {
-		if (m_services) LOG_UI(m_services, L"HookCore::ApplyHook failed at 0x%llX\n", addr);
+		if (m_services) LOG_UI_E(m_services, L"HookCore::ApplyHook failed at 0x%llX\n", addr);
 		MessageBox(L"Hook failed", L"Hook", MB_OK | MB_ICONERROR);
 	}
 	return false;
@@ -1291,7 +1291,7 @@ bool HookProcDlg::HookCommonCodeLua(DWORD64 module_base, DWORD module_offset, st
 			LOG_UI(m_services, L"HookCommonCodeLua: %s detected at 0x%llX after injection (pid %u)\n", is64 ? LUA_ENGINE_DLL_X64 : LUA_ENGINE_DLL_Win32, luaEngineBase, m_pid);
 		}
 		else {
-			LOG_UI(m_services, L"HookCommonCodeLua: failed to inject %s (pid %u), aborting\n", is64 ? LUA_ENGINE_DLL_X64 : LUA_ENGINE_DLL_Win32, m_pid);
+			LOG_UI_E(m_services, L"HookCommonCodeLua: failed to inject %s (pid %u), aborting\n", is64 ? LUA_ENGINE_DLL_X64 : LUA_ENGINE_DLL_Win32, m_pid);
 			return false;
 		}
 	}
@@ -1300,7 +1300,7 @@ bool HookProcDlg::HookCommonCodeLua(DWORD64 module_base, DWORD module_offset, st
 	const char* dispatchName = is64 ? LUA_ENGINE_EXPORT_X64 : LUA_ENGINE_EXPORT_Win32;
 	DWORD dispatchOffset = 0;
 	if (!m_services->CheckExportFromFile(luaEngineFullPath.c_str(), dispatchName, &dispatchOffset)) {
-		LOG_UI(m_services, L"failed to get LuaEngine dispatch export: %S\n", dispatchName);
+		LOG_UI_E(m_services, L"failed to get LuaEngine dispatch export: %S\n", dispatchName);
 		MessageBox(L"Failed to find LuaEngine dispatch export", L"Hook", MB_OK | MB_ICONERROR);
 		return false;
 	}
@@ -1374,7 +1374,7 @@ bool HookProcDlg::HookCommonCodeLua(DWORD64 module_base, DWORD module_offset, st
 
 		HANDLE hProc = NULL;
 		if (!m_services->GetHighAccessProcHandle(m_pid, &hProc) || !hProc) {
-			LOG_UI(m_services, L"HookCommonCodeLua: failed to get high access process handle, pid=%u\n", m_pid);
+			LOG_UI_E(m_services, L"HookCommonCodeLua: failed to get high access process handle, pid=%u\n", m_pid);
 		}
 		else {
 			DWORD oldProtect = 0;
@@ -1416,7 +1416,7 @@ bool HookProcDlg::HookCommonCodeLua(DWORD64 module_base, DWORD module_offset, st
 		return true;
 	}
 	else {
-		LOG_UI(m_services, L"LuaHook ApplyHook failed at 0x%llX\n", addr);
+		LOG_UI_E(m_services, L"LuaHook ApplyHook failed at 0x%llX\n", addr);
 		MessageBox(L"Hook failed", L"Hook", MB_OK | MB_ICONERROR);
 	}
 	return false;
@@ -1520,7 +1520,7 @@ void HookProcDlg::OnBnClickedApplyHook() {
 	// we also need to check hookcode.dll meet the arch of target process
 	bool is_pe_64;
 	if (!m_services->CheckPeArch(selectedPath.GetString(), is_pe_64)) {
-		LOG_UI(m_services, L"failed to call CheckPeArch, PE_Path=%s, CPU=%s\n", selectedPath.GetString(), is64 ? L"x64" : L"x86");
+		LOG_UI_E(m_services, L"failed to call CheckPeArch, PE_Path=%s, CPU=%s\n", selectedPath.GetString(), is64 ? L"x64" : L"x86");
 		MessageBox(L"failed to call CheckPeArch", L"Hook", MB_OK | MB_ICONERROR);
 		return;
 	}

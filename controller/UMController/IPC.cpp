@@ -45,26 +45,26 @@ BOOL IPC_SendInject(DWORD pid, PCWSTR dllPath)
 		return FALSE;
 	}
 	if (!hProc) {
-		LOG_CTRL_ETW(L"failed to call FLTCOMM_GetProcessHandle, Pid=%u\n", pid);
+		LOG_CTRL_ETW_E(L"failed to call FLTCOMM_GetProcessHandle, Pid=%u\n", pid);
 		return FALSE;
 	}
 	bool IsWow64;
 	if (0!=(ULONG)(ULONG_PTR)PHLIB::IsProcessWow64((void*)(ULONG_PTR)hProc, (void*)(ULONG_PTR)&IsWow64)) {
-		LOG_CTRL_ETW(L"failed to call PHLIB::IsProcessWow64, Pid=%u\n", pid);
+		LOG_CTRL_ETW_E(L"failed to call PHLIB::IsProcessWow64, Pid=%u\n", pid);
 		return FALSE;
 	}
 	bool is64 = !IsWow64;
 	std::wstring target_module = is64 ? X64_DLL : X86_DLL;
 	PVOID ModuleBase = NULL;
 	if (0 != (ULONG)(ULONG_PTR)PHLIB::PhpEnumProcessModules((void*)(ULONG_PTR)is64, (void*)(ULONG_PTR)hProc, (void*)(ULONG_PTR)target_module.c_str(), (void*)(ULONG_PTR)&ModuleBase)) {
-		LOG_CTRL_ETW(L"failed to call PHLIB::PhpEnumProcessModules, Pid=%u\n", pid);
+		LOG_CTRL_ETW_E(L"failed to call PHLIB::PhpEnumProcessModules, Pid=%u\n", pid);
 		return FALSE;
 	}
 	// get export function offset of master dll base
 	auto s = Helper::GetCurrentDirFilePath((TCHAR*)target_module.c_str());
 	DWORD  out_func_offset = 0;
 	if (!Helper::CheckExportFromFile(s.c_str(), MASETER_EXP_FUNC_NAME_STR, &out_func_offset)) {
-		LOG_CTRL_ETW(L"can not locate export function Name=%s of module Path=%s\n", WIDEN(MASETER_EXP_FUNC_NAME_STR), s.c_str());
+		LOG_CTRL_ETW_E(L"can not locate export function Name=%s of module Path=%s\n", WIDEN(MASETER_EXP_FUNC_NAME_STR), s.c_str());
 		Helper::Fatal(L"IPC: can not locate export function\n");
 		return FALSE;
 	}
@@ -73,7 +73,7 @@ BOOL IPC_SendInject(DWORD pid, PCWSTR dllPath)
 	DWORD old_protect = 0;
 #ifdef _DEBUG
 	if (!::VirtualProtectEx(hProc, (LPVOID)((DWORD64)ModuleBase + out_func_offset + E9_JMP_INSTRUCTION_OPCODE_SIZE), E9_JMP_INSTRUCTION_OPRAND_SIZE, PAGE_EXECUTE_READWRITE, &old_protect)) {
-		LOG_CTRL_ETW( L"IPC VirtualProtectEx line number: %d, error code: 0x%x\n", __LINE__, GetLastError());
+		LOG_CTRL_ETW_E(L"IPC VirtualProtectEx line number: %d, error code: 0x%x\n", __LINE__, GetLastError());
 		return FALSE;
 	}
 
@@ -81,12 +81,12 @@ BOOL IPC_SendInject(DWORD pid, PCWSTR dllPath)
 	if (!::ReadProcessMemory(hProc, (LPVOID)((DWORD64)ModuleBase + out_func_offset + E9_JMP_INSTRUCTION_OPCODE_SIZE),
 		(LPVOID)&e9_jmp_instruction_oprand, E9_JMP_INSTRUCTION_OPRAND_SIZE, NULL)) {
 		
-		LOG_CTRL_ETW(L"failed to call ReadProcessMemory to get real export function addr, PID=%u\n", pid);
+		LOG_CTRL_ETW_E(L"failed to call ReadProcessMemory to get real export function addr, PID=%u\n", pid);
 		return FALSE;
 	}
 	master_exp_addr = (PVOID)((DWORD64)ModuleBase + out_func_offset + E9_JMP_INSTRUCTION_SIZE + e9_jmp_instruction_oprand);
 	if (!::VirtualProtectEx(hProc, (LPVOID)((DWORD64)ModuleBase + out_func_offset + E9_JMP_INSTRUCTION_OPCODE_SIZE), E9_JMP_INSTRUCTION_OPRAND_SIZE, old_protect, &old_protect)) {
-		LOG_CTRL_ETW(L"IPC VirtualProtectEx line number: %d, error code: 0x%x\n", __LINE__, GetLastError());
+		LOG_CTRL_ETW_E(L"IPC VirtualProtectEx line number: %d, error code: 0x%x\n", __LINE__, GetLastError());
 		return FALSE;
 	}
 #endif
@@ -97,15 +97,15 @@ BOOL IPC_SendInject(DWORD pid, PCWSTR dllPath)
 	asci_dllpath[strlen(asci_dllpath)] = IPC_DLL_PATH_END_MARK;
 	// try write dll path into process memory
 	if (!::VirtualProtectEx(hProc, (LPVOID)master_exp_addr, MAX_PATH, PAGE_EXECUTE_READWRITE, &old_protect)) {
-		LOG_CTRL_ETW( L"IPC VirtualProtectEx line number: %d, error code: 0x%x\n", __LINE__, GetLastError());
+		LOG_CTRL_ETW_E(L"IPC VirtualProtectEx line number: %d, error code: 0x%x\n", __LINE__, GetLastError());
 		return FALSE;
 	}
 	if(!Helper::WriteProcessMemoryWrap(hProc, master_exp_addr, asci_dllpath,MAX_PATH, NULL)) {
-		LOG_CTRL_ETW(L"IPC failed to call WriteProcessMemoryWrap, Pid=%u\n", pid);
+		LOG_CTRL_ETW_E(L"IPC failed to call WriteProcessMemoryWrap, Pid=%u\n", pid);
 		return FALSE;
 	}
 	if (!::VirtualProtectEx(hProc, (LPVOID)master_exp_addr, MAX_PATH, old_protect, &old_protect)) {
-		LOG_CTRL_ETW( L"IPC VirtualProtectEx line number: %d, error code: 0x%x\n", __LINE__, GetLastError());
+		LOG_CTRL_ETW_E(L"IPC VirtualProtectEx line number: %d, error code: 0x%x\n", __LINE__, GetLastError());
 		return FALSE;
 	}
 
@@ -118,7 +118,7 @@ BOOL IPC_SendInject(DWORD pid, PCWSTR dllPath)
 		LOG_CTRL_ETW(L"event=%s signaled, notifying injected dll to process injection request\n", event_name);
 	}
 	else {
-		LOG_CTRL_ETW(L"failed to open event==%s, error=0x%x\n", event_name, GetLastError());
+		LOG_CTRL_ETW_E(L"failed to open event==%s, error=0x%x\n", event_name, GetLastError());
 		return FALSE;
 	}
 	return TRUE;

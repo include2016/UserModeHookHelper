@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -157,7 +157,13 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableUAC>false</EnableUAC>
     </Link>
-  </ItemDefinitionGroup>
+      <PostBuildEvent>
+      <Command>if not exist "$(SolutionDir)product\plugins" mkdir "$(SolutionDir)product\plugins"
+if not exist "$(SolutionDir)product\pdb" mkdir "$(SolutionDir)product\pdb"
+copy /Y "$(TargetPath)" "$(SolutionDir)product\plugins\"
+copy /Y "$(TargetDir)$(TargetName).pdb" "$(SolutionDir)product\pdb\"</Command>
+    </PostBuildEvent>
+</ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="framework.h" />
     <ClInclude Include="pch.h" />

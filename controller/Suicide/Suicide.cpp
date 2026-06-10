@@ -11,6 +11,8 @@ static const GUID ProviderGUID =
 { 0x3da12c0, 0x27c2, 0x4d75, { 0x95, 0x3a, 0x2c, 0x4e, 0x66, 0xa3, 0x74, 0x64 } };
 REGHANDLE g_ProviderHandle;
 void Log(_In_ PCWSTR Format, ...);
+#define LogD(fmt, ...) Log(L"[SUICIDE]    " fmt, __VA_ARGS__)
+#define LogE(fmt, ...) Log(L"[SUICIDE]    [E] " fmt, __VA_ARGS__)
 
 
 bool FLTCOMM_GetProcessHandle(HANDLE m_Port, DWORD pid, HANDLE* outHandle);
@@ -53,18 +55,18 @@ int main(int argc, char* argv[]) {
 		&m_Port
 	);
 	if (hResult != S_OK) {
-		Log(L"failed to call FilterConnectCommunicationPort: 0x%x\n", hResult);
+		LogE(L"failed to call FilterConnectCommunicationPort: 0x%x\n", hResult);
 		MessageBoxA(NULL, "FilterConnectCommunicationPort failed in Filter constructor", "Suicide", MB_ICONERROR);
 		exit(-1);
 	}
 	else
-		Log(L"successfully connect to minifilterport: 0x%p\n", m_Port);
+		LogD(L"successfully connect to minifilterport: 0x%p\n", m_Port);
 
 
 	// get process handle
 	HANDLE hProc = NULL;
 	if (!FLTCOMM_GetProcessHandle(m_Port,pid, &hProc)) {
-		Log(L"failed to call FLTCOMM_GetProcessHandle\n");
+		LogE(L"failed to call FLTCOMM_GetProcessHandle\n");
 		MessageBoxA(NULL, "FLTCOMM_GetProcessHandle failed", "Suicide", MB_ICONERROR);
 		exit(-1);
 	}
@@ -75,11 +77,11 @@ int main(int argc, char* argv[]) {
 	HANDLE thread_handle = 0;
 	if (!FLTCOMM_CreateRemoteThread(m_Port, pid, (PVOID)pLoadLibraryW, (PVOID)dll_path_addr, 
 		(PVOID)syscall_addr, &thread_handle, NULL, hProc)) {
-		Log(L"failed to call FLTCOMM_CreateRemoteThread\n");
+		LogE(L"failed to call FLTCOMM_CreateRemoteThread\n");
 		MessageBoxA(NULL, "FLTCOMM_CreateRemoteThread failed", "Suicide", MB_ICONERROR);
 		exit(-1);
 	}
-	Log(L"I'm going commit suicide\n");
+	LogD(L"I'm going commit suicide\n");
 	exit(-1);
 	return 0;
 }
@@ -101,7 +103,7 @@ bool FLTCOMM_GetProcessHandle(HANDLE m_Port,DWORD pid, HANDLE* outHandle) {
 	HRESULT hr = FilterSendMessage(m_Port, msg, (DWORD)msgSize, reply.get(), (DWORD)replySize, &bytesOut);
 	free(msg);
 	if (hr != S_OK || bytesOut != (DWORD)replySize) {
-		Log(L"FLTCOMM_GetProcessHandle: FilterSendMessage hr=0x%x bytesOut=%u (expected %u)\n", hr, bytesOut, (unsigned)replySize);
+		LogD(L"FLTCOMM_GetProcessHandle: FilterSendMessage hr=0x%x bytesOut=%u (expected %u)\n", hr, bytesOut, (unsigned)replySize);
 		return false;
 	}
 	unsigned long long h64 = 0;

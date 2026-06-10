@@ -128,15 +128,15 @@ void CUMControllerDlg::OnToggleGlobalHookMode() {
 	m_globalHookMode = !m_globalHookMode;
 	// persist
 	if (!RegistryStore::WriteGlobalHookMode(m_globalHookMode)) {
-		LOG_CTRL_ETW(L"Failed to persist GlobalHookMode=%d\n", (int)m_globalHookMode);
+		LOG_CTRL_ETW_E(L"Failed to persist GlobalHookMode=%d\n", (int)m_globalHookMode);
 	}
 	// Ensure boot-start driver is configured/started/stopped to match the new mode.
 	if (!Helper::ConfigureBootStartService(m_globalHookMode)) {
-		LOG_CTRL_ETW(L"ConfigureBootStartService failed for enabled=%d\n", (int)m_globalHookMode);
+		LOG_CTRL_ETW_E(L"ConfigureBootStartService failed for enabled=%d\n", (int)m_globalHookMode);
 	}
 	// Notify driver via filter IPC
 	if (!m_Filter.FLTCOMM_SetGlobalHookMode(m_globalHookMode)) {
-		LOG_CTRL_ETW(L"Failed to send GlobalHookMode to driver\n");
+		LOG_CTRL_ETW_E(L"Failed to send GlobalHookMode to driver\n");
 	}
 	// update menu check and redraw menu bar
 	if (GetMenu()) {
@@ -190,7 +190,7 @@ LRESULT CUMControllerDlg::OnApplyGlobalHookMenu(WPARAM wParam, LPARAM lParam) {
 			return 0;
 		}
 	}
-	LOG_CTRL_ETW(L"Delayed menu enforcement failed after retries: menu not available\n");
+	LOG_CTRL_ETW_E(L"Delayed menu enforcement failed after retries: menu not available\n");
 	return 0;
 }
 
@@ -435,7 +435,7 @@ public:
 		DWORD timeoutMs = TRAMPOLINE_INJECTION_TIMEOUT;
 	
 		if (targetPid == 0 || !fullDllPath || *fullDllPath == L'\0') {
-			LOG_CTRL_ETW(L"InjectTrampoline: invalid args pid=%u\n", targetPid);
+			LOG_CTRL_ETW_E(L"InjectTrampoline: invalid args pid=%u\n", targetPid);
 			return false;
 		}
 
@@ -453,13 +453,13 @@ public:
 	
 		HANDLE hWaitEvent = CreateEventW(NULL, FALSE, FALSE, eventName);
 		if (!hWaitEvent) {
-			LOG_CTRL_ETW(L"InjectTrampoline: failed to create wait event (err=%lu)\n", GetLastError());
+			LOG_CTRL_ETW_E(L"InjectTrampoline: failed to create wait event (err=%lu)\n", GetLastError());
 			return false;
 		}
 
 	
 		if (!IPC_SendInject(targetPid, fullDllPath)) {
-			LOG_CTRL_ETW(L"InjectTrampoline: IPC_SendInject failed (err=%lu)\n", GetLastError());
+			LOG_CTRL_ETW_E(L"InjectTrampoline: IPC_SendInject failed (err=%lu)\n", GetLastError());
 			CloseHandle(hWaitEvent);
 			return false;
 		}
@@ -480,7 +480,7 @@ public:
 					timeoutMs, targetPid);
 			}
 			else {
-				LOG_CTRL_ETW(L"InjectTrampoline: wait failed (err=%lu), falling back to polling\n", GetLastError());
+				LOG_CTRL_ETW_E(L"InjectTrampoline: wait failed (err=%lu), falling back to polling\n", GetLastError());
 			}
 		}
 		else {
@@ -543,7 +543,7 @@ public:
 		Filter* f = Helper::GetFilterInstance();
 		if (f) {
 			if (!f->FLTCOMM_GetProcessHandle(pid, hProc)) {
-				LOG_CTRL_ETW(L"failed to call FLTCOMM_GetProcessHandle\n");
+				LOG_CTRL_ETW_E(L"failed to call FLTCOMM_GetProcessHandle\n");
 				return false;
 			}
 			return true;
@@ -761,7 +761,7 @@ BOOL CUMControllerDlg::OnInitDialog()
 	}
 	Helper::UMHH_DriverCheck();
 	if (!Helper::IsServiceRunning(SERVICE_NAME)) {
-		LOG_CTRL_ETW(L"UMHH service '%s' is not running\n", SERVICE_NAME);
+		LOG_CTRL_ETW_E(L"UMHH service '%s' is not running\n", SERVICE_NAME);
 		Helper::Fatal(L"UMHH service" SERVICE_NAME L" is not running");
 	}
 	// resolve NtCreateThreadEx syscal number
@@ -772,7 +772,7 @@ BOOL CUMControllerDlg::OnInitDialog()
 	{
 		wchar_t sysDir[MAX_PATH] = { 0 };
 		if (!GetSystemDirectoryW(sysDir, _countof(sysDir))) {
-			LOG_CTRL_ETW(L"GetSystemDirectoryW failed, Error=0x%x\n", GetLastError());
+			LOG_CTRL_ETW_E(L"GetSystemDirectoryW failed, Error=0x%x\n", GetLastError());
 			Helper::Fatal(L"GetSystemDirectoryW failed, Error=0x%x\n");
 		}
 		std::wstring str = sysDir;
@@ -838,7 +838,7 @@ BOOL CUMControllerDlg::OnInitDialog()
 		}
 	}
 	catch (...) {
-		LOG_CTRL_ETW(L"Failed to restore instant hook listeners from registry\n");
+		LOG_CTRL_ETW_E(L"Failed to restore instant hook listeners from registry\n");
 	}
 
 	// Restore instant patch listeners from registry
@@ -853,7 +853,7 @@ BOOL CUMControllerDlg::OnInitDialog()
 				// Convert .patchseq to .hookseq
 				std::wstring hookSeqPath;
 				if (!InstantHookManager::ConvertPatchSeqToHookSeq(patchSeqPath.c_str(), hookSeqPath)) {
-					LOG_CTRL_ETW(L"Failed to convert .patchseq to .hookseq for processHash=%llx\n", processFnvHash);
+					LOG_CTRL_ETW_E(L"Failed to convert .patchseq to .hookseq for processHash=%llx\n", processFnvHash);
 					continue;
 				}
 
@@ -900,7 +900,7 @@ BOOL CUMControllerDlg::OnInitDialog()
 		}
 	}
 	catch (...) {
-		LOG_CTRL_ETW(L"Failed to restore instant patch listeners from registry\n");
+		LOG_CTRL_ETW_E(L"Failed to restore instant patch listeners from registry\n");
 	}
 
 
@@ -927,7 +927,7 @@ BOOL CUMControllerDlg::OnInitDialog()
 			waited += INTERVAL_MS;
 		}
 		if (!mapped) {
-			LOG_CTRL_ETW(L"Hook section mapping failed after %dms; resolver will fall back to per-path IPC\n", MAX_MS);
+			LOG_CTRL_ETW_E(L"Hook section mapping failed after %dms; resolver will fall back to per-path IPC\n", MAX_MS);
 		}
 	}
 	// Initialize startup progress UI before enumeration so inline resolution / resolver can update it.
@@ -1185,12 +1185,12 @@ BOOL CUMControllerDlg::OnInitDialog()
 			ULONG inVal = m_selfDefenseEnabled ? 1u : 0u; DWORD bytes = 0;
 			DWORD ioctl = CTL_CODE(FILE_DEVICE_UNKNOWN, 0x900, METHOD_BUFFERED, FILE_ANY_ACCESS);
 			if (!DeviceIoControl(hDev, ioctl, &inVal, sizeof(inVal), NULL, 0, &bytes, NULL)) {
-				LOG_CTRL_ETW(L"SelfDefense IOCTL_SET failed: err=%lu\n", GetLastError());
+				LOG_CTRL_ETW_E(L"SelfDefense IOCTL_SET failed: err=%lu\n", GetLastError());
 			}
 			CloseHandle(hDev);
 		}
 		else {
-			LOG_CTRL_ETW(L"SelfDefense device open failed: err=%lu\n", GetLastError());
+			LOG_CTRL_ETW_E(L"SelfDefense device open failed: err=%lu\n", GetLastError());
 		}
 		// Update menu check
 		if (GetMenu() && GetMenu()->m_hMenu) {
@@ -1350,13 +1350,13 @@ void CUMControllerDlg::OnAddExecutableToHookList() {
 
 	// Persist to registry. Rollback kernel entry if persistence fails.
 	if (!RegistryStore::AddPath(ntPathToSend)) {
-		LOG_CTRL_ETW(L"OnAddExecutableToHookList: RegistryStore::AddPath failed for %s - attempting rollback\n", ntPathToSend.c_str());
+		LOG_CTRL_ETW_E(L"OnAddExecutableToHookList: RegistryStore::AddPath failed for %s - attempting rollback\n", ntPathToSend.c_str());
 		// rollback kernel
 		const UCHAR* b2 = reinterpret_cast<const UCHAR*>(ntPathToSend.c_str());
 		size_t bLen2 = ntPathToSend.size() * sizeof(wchar_t);
 		unsigned long long h2 = Helper::GetNtPathHash(b2, bLen2);
 		if (!m_Filter.FLTCOMM_RemoveHookByHash(h2)) {
-			LOG_CTRL_ETW(L"OnAddExecutableToHookList: rollback RemoveHookByHash failed for %s\n", ntPathToSend.c_str());
+			LOG_CTRL_ETW_E(L"OnAddExecutableToHookList: rollback RemoveHookByHash failed for %s\n", ntPathToSend.c_str());
 		}
 		::MessageBoxW(NULL, L"Failed to persist hook entry to registry. The kernel entry has been rolled back.", L"Add Executable", MB_OK | MB_ICONERROR);
 		return;
@@ -2108,7 +2108,7 @@ void CUMControllerDlg::OnWakeUp()
 		LOG_CTRL_ETW(L"process Pid=%d should be waken up now\n", pid);
 	}
 	else {
-		LOG_CTRL_ETW(L"failed to set Event=%s to wake Pid=%d up, Error=0x%x\n", event_name, pid, GetLastError());
+		LOG_CTRL_ETW_E(L"failed to set Event=%s to wake Pid=%d up, Error=0x%x\n", event_name, pid, GetLastError());
 	}
 }
 
@@ -2121,7 +2121,7 @@ void CUMControllerDlg::OnTerminateProcess()
 
 	HANDLE hProc = NULL;
 	if (!g_HookServices.GetHighAccessProcHandle(pid, &hProc) || !hProc) {
-		LOG_CTRL_ETW(L"TerminateProcess: failed to get high access handle for pid=%u\n", pid);
+		LOG_CTRL_ETW_E(L"TerminateProcess: failed to get high access handle for pid=%u\n", pid);
 		MessageBoxW(L"Failed to get a high access process handle.", L"Terminate", MB_OK | MB_ICONERROR);
 		return;
 	}
@@ -2131,7 +2131,7 @@ void CUMControllerDlg::OnTerminateProcess()
 	CloseHandle(hProc);
 
 	if (!ok) {
-		LOG_CTRL_ETW(L"TerminateProcess failed for pid=%u error=0x%x\n", pid, error);
+		LOG_CTRL_ETW_E(L"TerminateProcess failed for pid=%u error=0x%x\n", pid, error);
 		MessageBoxW(L"Failed to terminate selected process.", L"Terminate", MB_OK | MB_ICONERROR);
 		return;
 	}
@@ -2702,7 +2702,7 @@ void CUMControllerDlg::OnUnprotectPpl() {
 	// protect process is not supported
 	bool is_protected = false;
 	if (!m_Filter.FLTCOMM_IsProtectedProcess(pid, is_protected)) {
-		LOG_CTRL_ETW(L"Failed to call FLTCOMM_IsProtectedProcess\n");
+		LOG_CTRL_ETW_E(L"Failed to call FLTCOMM_IsProtectedProcess\n");
 		MessageBoxW(L"Failed to call FLTCOMM_IsProtectedProcess", L"OnUnprotectPpl", MB_ICONERROR | MB_OK);
 		return;
 	}
@@ -2810,7 +2810,7 @@ void CUMControllerDlg::OnMarkEarlyBreak()
 		return;
 	}
 	if (!RegistryStore::AddEarlyBreakMark(ntpath)) {
-		LOG_CTRL_ETW(L"Failed to persist EarlyBreak mark for pid=%u\n", pid);
+		LOG_CTRL_ETW_E(L"Failed to persist EarlyBreak mark for pid=%u\n", pid);
 		MessageBox(L"Failed to persist Early Break mark. Check permissions.", L"Error", MB_ICONERROR | MB_OK);
 		return;
 	}
@@ -2843,7 +2843,7 @@ void CUMControllerDlg::OnMarkEarlyBreak()
 	_snwprintf_s(pathBuf, RTL_NUMBER_OF(pathBuf), USER_MODE_EARLY_BREAK_SIGNAL_FILE_FMT, hval);
 	HANDLE hfile;
 	if (!Helper::CreateLowPrivReqFile(pathBuf, &hfile)) {
-		LOG_CTRL_ETW(L"Failed to create early break signal file path=%s\n", pathBuf);
+		LOG_CTRL_ETW_E(L"Failed to create early break signal file path=%s\n", pathBuf);
 		MessageBox(L"Failed to create early break signal file", L"Error", MB_ICONERROR | MB_OK);
 		return;
 	}
@@ -2869,7 +2869,7 @@ void CUMControllerDlg::OnUnmarkEarlyBreak()
 		return;
 	}
 	if (!RegistryStore::RemoveEarlyBreakMark(ntpath)) {
-		LOG_CTRL_ETW(L"Failed to remove EarlyBreak mark for pid=%u\n", pid);
+		LOG_CTRL_ETW_E(L"Failed to remove EarlyBreak mark for pid=%u\n", pid);
 		MessageBox(L"Failed to remove Early Break mark. Check permissions.", L"Error", MB_ICONERROR | MB_OK);
 		return;
 	}
@@ -2933,7 +2933,7 @@ void CUMControllerDlg::OnForceInject()
 			DWORD hi = e.startTime.dwHighDateTime;
 			DWORD lo = e.startTime.dwLowDateTime;
 			if (!RegistryStore::AddForcedMark(pid, hi, lo)) {
-				LOG_CTRL_ETW(L"Failed to persist forced mark for pid=%u\n", pid);
+				LOG_CTRL_ETW_E(L"Failed to persist forced mark for pid=%u\n", pid);
 			}
 			else {
 				unsigned long long key = (static_cast<unsigned long long>(pid) << 48) ^ (static_cast<unsigned long long>(hi) << 24) ^ static_cast<unsigned long long>(lo);
@@ -2987,19 +2987,19 @@ void CUMControllerDlg::OnAddWhitelist()
 	unsigned long long hash = Helper::GetNtPathHash(bytes, len);
 
 	if (!RegistryStore::AddWhitelistPath(ntToPersist)) {
-		LOG_CTRL_ETW(L"AddWhitelist: failed to persist NT path %s\n", ntToPersist.c_str());
+		LOG_CTRL_ETW_E(L"AddWhitelist: failed to persist NT path %s\n", ntToPersist.c_str());
 		MessageBoxW(L"Failed to persist whitelist path.", L"Whitelist", MB_OK | MB_ICONERROR);
 		return;
 	}
 	if (!RegistryStore::AddWhitelistHash(hash)) {
-		LOG_CTRL_ETW(L"AddWhitelist: failed to persist hash 0x%016llX for %s\n", hash, ntToPersist.c_str());
+		LOG_CTRL_ETW_E(L"AddWhitelist: failed to persist hash 0x%016llX for %s\n", hash, ntToPersist.c_str());
 		MessageBoxW(L"Failed to persist whitelist hash.", L"Whitelist", MB_OK | MB_ICONERROR);
 		return;
 	}
 
 	// Restart ObCallback so driver reloads whitelist keys at start
 	if (!Helper::UMHH_ObCallback_DriverCheck()) {
-		LOG_CTRL_ETW(L"AddWhitelist: UMHH_ObCallback_DriverCheck failed\n");
+		LOG_CTRL_ETW_E(L"AddWhitelist: UMHH_ObCallback_DriverCheck failed\n");
 		MessageBoxW(L"Whitelist persisted, but failed to restart ObCallback.", L"Whitelist", MB_OK | MB_ICONWARNING);
 		return;
 	}
@@ -3111,12 +3111,12 @@ void CUMControllerDlg::FinishStartupIfDone() {
 						}
 						// Rewrite forced marks with only kept entries
 						if (!RegistryStore::WriteForcedMarks(keptForced)) {
-							LOG_CTRL_ETW(L"Background purge: failed to write filtered ForcedList\n");
+							LOG_CTRL_ETW_E(L"Background purge: failed to write filtered ForcedList\n");
 						}
 						// Note: do not modify in-memory caches here; registry purge is sufficient
 					}
 				}
-				catch (...) { LOG_CTRL_ETW(L"Background purge: failed while purging ForcedList\n"); }
+				catch (...) { LOG_CTRL_ETW_E(L"Background purge: failed while purging ForcedList\n"); }
 
 				// Purge composite process cache (NtProcCache) entries not in knownKeys
 				try {
@@ -3134,12 +3134,12 @@ void CUMControllerDlg::FinishStartupIfDone() {
 							}
 						}
 						if (!RegistryStore::WriteCompositeProcCache(keptComp)) {
-							LOG_CTRL_ETW(L"Background purge: failed to write filtered NtProcCache\n");
+							LOG_CTRL_ETW_E(L"Background purge: failed to write filtered NtProcCache\n");
 						}
 						// Note: do not modify in-memory caches here; registry purge is sufficient
 					}
 				}
-				catch (...) { LOG_CTRL_ETW(L"Background purge: failed while purging NtProcCache\n"); }
+				catch (...) { LOG_CTRL_ETW_E(L"Background purge: failed while purging NtProcCache\n"); }
 
 				// Purge PPL-related lists (OriginalProt, Elevated, Unprotected)
 				try {
@@ -3183,16 +3183,16 @@ void CUMControllerDlg::FinishStartupIfDone() {
 						}
 					}
 				}
-				catch (...) { LOG_CTRL_ETW(L"Background purge: failed while purging PPL lists\n"); }
+				catch (...) { LOG_CTRL_ETW_E(L"Background purge: failed while purging PPL lists\n"); }
 			}
 			catch (...) {
-				LOG_CTRL_ETW(L"Background purge: failed to purge stale ProcHookList entries\n");
+				LOG_CTRL_ETW_E(L"Background purge: failed to purge stale ProcHookList entries\n");
 			}
 		}).detach();
 		LOG_CTRL_ETW(L"Scheduled background purge of ProcHookList entries\n");
 	}
 	catch (...) {
-		LOG_CTRL_ETW(L"FinishStartupIfDone: failed to schedule background purge\n");
+		LOG_CTRL_ETW_E(L"FinishStartupIfDone: failed to schedule background purge\n");
 	}
 }
 
@@ -3288,7 +3288,7 @@ void CUMControllerDlg::OnAddExecutableToEarlyBreakList() {
 	
 	// Persist to registry
 	if (!RegistryStore::AddEarlyBreakMark(ntPathLower)) {
-		app.GetETW().Log(L"OnAddExecutableToEarlyBreakList: Failed to persist EarlyBreak mark for %s\n", ntPathLower.c_str());
+		app.GetETW().Log(L"[UMCtrl]     [E] OnAddExecutableToEarlyBreakList: Failed to persist EarlyBreak mark for %s\n", ntPathLower.c_str());
 		MessageBox(L"Failed to persist EarlyBreak mark to registry.", L"Warning", MB_ICONWARNING);
 	}
 	
@@ -3300,7 +3300,7 @@ void CUMControllerDlg::OnAddExecutableToEarlyBreakList() {
 	_snwprintf_s(pathBuf, RTL_NUMBER_OF(pathBuf), USER_MODE_EARLY_BREAK_SIGNAL_FILE_FMT, hval);
 	HANDLE hfile;
 	if (!Helper::CreateLowPrivReqFile(pathBuf, &hfile)) {
-		app.GetETW().Log(L"OnAddExecutableToEarlyBreakList: Failed to create early break signal file path=%s\n", pathBuf);
+		app.GetETW().Log(L"[UMCtrl]     [E] OnAddExecutableToEarlyBreakList: Failed to create early break signal file path=%s\n", pathBuf);
 		MessageBox(L"Failed to create early break signal file.", L"Error", MB_ICONERROR);
 		return;
 	}
@@ -3349,7 +3349,7 @@ void CUMControllerDlg::OnRemoveExecutableFromEarlyBreakList() {
 			
 			// Remove from registry
 			if (!RegistryStore::RemoveEarlyBreakMark(selected)) {
-				app.GetETW().Log(L"OnRemoveExecutableFromEarlyBreakList: RegistryStore::RemoveEarlyBreakMark failed for %s\n", selected.c_str());
+				app.GetETW().Log(L"[UMCtrl]     [E] OnRemoveExecutableFromEarlyBreakList: RegistryStore::RemoveEarlyBreakMark failed for %s\n", selected.c_str());
 			} else {
 				anyRemoved = true;
 				
@@ -3360,7 +3360,7 @@ void CUMControllerDlg::OnRemoveExecutableFromEarlyBreakList() {
 				WCHAR pathBuf[MAX_PATH] = { 0 };
 				_snwprintf_s(pathBuf, RTL_NUMBER_OF(pathBuf), USER_MODE_EARLY_BREAK_SIGNAL_FILE_FMT, hval);
 				if (!DeleteFile(pathBuf)) {
-					app.GetETW().Log(L"OnRemoveExecutableFromEarlyBreakList: Failed to delete early break signal file path=%s\n", pathBuf);
+					app.GetETW().Log(L"[UMCtrl]     [E] OnRemoveExecutableFromEarlyBreakList: Failed to delete early break signal file path=%s\n", pathBuf);
 				} else {
 					app.GetETW().Log(L"OnRemoveExecutableFromEarlyBreakList: Deleted early break signal file path=%s\n", pathBuf);
 				}

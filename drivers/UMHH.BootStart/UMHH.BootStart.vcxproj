@@ -183,7 +183,13 @@
     <Link>
       <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
     </Link>
-  </ItemDefinitionGroup>
+      <PostBuildEvent>
+      <Command>if not exist "$(SolutionDir)product\drivers" mkdir "$(SolutionDir)product\drivers"
+if not exist "$(SolutionDir)product\pdb" mkdir "$(SolutionDir)product\pdb"
+copy /Y "$(TargetPath)" "$(SolutionDir)product\drivers\"
+copy /Y "$(TargetDir)$(TargetName).pdb" "$(SolutionDir)product\pdb\"</Command>
+    </PostBuildEvent>
+</ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
       <WppEnabled>true</WppEnabled>

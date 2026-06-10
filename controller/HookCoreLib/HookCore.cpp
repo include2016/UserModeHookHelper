@@ -1,4 +1,4 @@
-#include "HookCore.h"
+﻿#include "HookCore.h"
 // Implementation-private Windows requirements (ok to include here; not exposed to MFC users before afx headers).
 #include <windows.h>
 #include <tlhelp32.h>
@@ -36,7 +36,7 @@ namespace HookCore {
 		PPH_MODULE_LIST_NODE head = NULL;
 		LONG status = (LONG)(ULONG_PTR)PHLIB::PhBuildModuleList((void*)(ULONG_PTR)pid, (void*)(ULONG_PTR)&head);
 		if (status != 0) {
-			LOG_CORE(g_hookServices, L"failed to call PHLIB::PhBuildModuleList, Status=0x%x\n", status);
+			LOG_CORE_E(g_hookServices, L"failed to call PHLIB::PhBuildModuleList, Status=0x%x\n", status);
 			MessageBoxW(NULL,L"failed to call PHLIB::PhBuildModuleList", L"HookDlg", MB_ICONERROR);
 			return false;
 		}
@@ -88,14 +88,14 @@ namespace HookCore {
 			return false;
 		}
 		if (!services->IsProcess64(pid, is64)) {
-			LOG_CORE(services, L"failed to call IsProcess64 target Pid=%u\n", pid);
+			LOG_CORE_E(services, L"failed to call IsProcess64 target Pid=%u\n", pid);
 			return false;
 		}
  
 		// try open process with suitable access
 		// we should request dirver to get a high access process handle
 		if (!services->GetHighAccessProcHandle(pid, &hProc)) {
-			LOG_CORE(services, L"failed to call GetHighAccessProcHandle target Pid=%u\n", pid);
+			LOG_CORE_E(services, L"failed to call GetHighAccessProcHandle target Pid=%u\n", pid);
 			return false;
 		}
 
@@ -113,7 +113,7 @@ namespace HookCore {
 		}
 		if (!module_base) {
 			if (services)
-				LOG_CORE(services, L"weird, found owner module %s but failed to get module base\n", owning.c_str());
+				LOG_CORE_E(services, L"weird, found owner module %s but failed to get module base\n", owning.c_str());
 			return false;
 		}
 		// Guard: forbid hooking our own master injection DLL (either x64 or x86 build name).
@@ -181,7 +181,7 @@ namespace HookCore {
 					}
 					if (services) services->LogCore(L"ApplyHook: trampoline DLL %s %s after signaling.\n", trampName.c_str(), loaded ? L"detected" : L"NOT detected within 5s");
 					if (!loaded) {
-						LOG_CORE(services, L"ApplyHook: can not continue because trampoline DLL is not laoded");
+						LOG_CORE_E(services, L"ApplyHook: can not continue because trampoline DLL is not laoded");
 						return false;
 					}
 				}
@@ -194,7 +194,7 @@ namespace HookCore {
 		PVOID trampoline_pit = AllocNearRemote(hProc, address, sizeof(void*));
 		if (!trampoline_pit) {
 			if (services)
-				LOG_CORE(services, L"failed to find a suitable memory region for trampoline code address\n");
+				LOG_CORE_E(services, L"failed to find a suitable memory region for trampoline code address\n");
 			return false;
 		}
 
@@ -203,7 +203,7 @@ namespace HookCore {
 		sprintf_s(stage_1_func_name, "trampoline_stage_1_num_%03d", hook_id);
 		DWORD stage_1_func_offset = 0;
 		if (!services->CheckExportFromFile(trampFullPath.c_str(), stage_1_func_name, &stage_1_func_offset)) {
-			LOG_CORE(services, L"required export function not found in dll Path=%s\n", trampFullPath.c_str());
+			LOG_CORE_E(services, L"required export function not found in dll Path=%s\n", trampFullPath.c_str());
 			return false;
 		}
 
@@ -217,7 +217,7 @@ namespace HookCore {
 		if (!::ReadProcessMemory(hProc, (LPVOID)((DWORD64)tramp_stage_1_addr + E9_JMP_INSTRUCTION_OPCODE_SIZE),
 			(LPVOID)&e9_jmp_instruction_oprand, E9_JMP_INSTRUCTION_OPRAND_SIZE, &bytesout)) {
 			if (services)
-				LOG_CORE(services, L"failed to call ReadProcessMemory to write trampoline code addr 0x%p to trampoline pit 0x%p, error: 0x%x\n",
+				LOG_CORE_E(services, L"failed to call ReadProcessMemory to write trampoline code addr 0x%p to trampoline pit 0x%p, error: 0x%x\n",
 					tramp_stage_1_addr, trampoline_pit, GetLastError());
 			return false;
 		}
@@ -228,7 +228,7 @@ namespace HookCore {
 		sprintf_s(stage_2_func_name, "trampoline_stage_2_num_%03d", hook_id);
 		DWORD stage_2_func_offset = 0;
 		if (!services->CheckExportFromFile(trampFullPath.c_str(), stage_2_func_name, &stage_2_func_offset)) {
-			LOG_CORE(services, L"required export function not found in dll Path=%s\n", trampFullPath.c_str());
+			LOG_CORE_E(services, L"required export function not found in dll Path=%s\n", trampFullPath.c_str());
 			return false;
 		}
 		PVOID tramp_stage_2_addr = (PVOID)(stage_2_func_offset + (DWORD64)trampoline_dll_base);
@@ -237,7 +237,7 @@ namespace HookCore {
 		e9_jmp_instruction_oprand = 0;
 		if (!::ReadProcessMemory(hProc, (LPVOID)((DWORD64)tramp_stage_2_addr + E9_JMP_INSTRUCTION_OPCODE_SIZE), (LPVOID)&e9_jmp_instruction_oprand, E9_JMP_INSTRUCTION_OPRAND_SIZE, &bytesout)) {
 			if (services)
-				LOG_CORE(services, L"failed to call WriteProcessMemory to write trampoline code addr 0x%p to trampoline pit 0x%p, error: 0x%x\n",
+				LOG_CORE_E(services, L"failed to call WriteProcessMemory to write trampoline code addr 0x%p to trampoline pit 0x%p, error: 0x%x\n",
 					tramp_stage_1_addr, trampoline_pit, GetLastError());
 			return false;
 		}
@@ -252,7 +252,7 @@ namespace HookCore {
 			if (!ConstructTrampoline_x64(services, hProc, (PVOID)address, module_base, trampoline_dll_base,
 				stage_1_func_offset, stage_2_func_offset, hook_code_addr, hook_id, hook_mode, &original_asm_code_len)) {
 				if (services)
-					LOG_CORE(services, L"ConstructTrampoline_x64 failed\n");
+					LOG_CORE_E(services, L"ConstructTrampoline_x64 failed\n");
 				return false;
 			}
 		}
@@ -260,17 +260,17 @@ namespace HookCore {
 			if (!ConstructTrampoline_x86(services, hProc, (PVOID)address, module_base, trampoline_dll_base,
 				stage_1_func_offset, stage_2_func_offset, hook_code_addr, hook_id, hook_mode, &original_asm_code_len)) {
 				if (services)
-					LOG_CORE(services, L"ConstructTrampoline_x64 failed\n");
+					LOG_CORE_E(services, L"ConstructTrampoline_x64 failed\n");
 				return false;
 			}
 		}
 		if (!InstallHook(services, hProc, (PVOID)address, trampoline_pit,
 			(PVOID)(stage_1_func_offset + (DWORD64)trampoline_dll_base + 0x3 + (is64 ? 0x8 : 0x4)),is64)) {
 			if (services)
-				LOG_CORE(services, L"InstallHook failed\n");
+				LOG_CORE_E(services, L"InstallHook failed\n");
 			// recover original asm code
 			if (!RemoveHookInternal(services, hProc, (PVOID)address, trampoline_dll_base, stage_2_func_offset, original_asm_code_len)) {
-				LOG_CORE(services, L"remove hook failed\n");
+				LOG_CORE_E(services, L"remove hook failed\n");
 			}
 			return false;
 		}
@@ -299,7 +299,7 @@ namespace HookCore {
 			return false;
 		}
 		if (!module_base) {
-			LOG_CORE(services, L"weird, found owner module %s but failed to get module base\n", owning.c_str());
+			LOG_CORE_E(services, L"weird, found owner module %s but failed to get module base\n", owning.c_str());
 			return false;
 		}
 
@@ -339,7 +339,7 @@ namespace HookCore {
 			}
 			services->LogCore(L"RemoveHook: trampoline DLL %s %s\n", trampName.c_str(), loaded ? L"detected" : L"NOT detected within 5s");
 			if (!loaded) {
-				LOG_CORE(services, L"RemoveHook: can not continue because trampoline DLL is not laoded");
+				LOG_CORE_E(services, L"RemoveHook: can not continue because trampoline DLL is not laoded");
 				return false;
 			}
 		}
@@ -347,12 +347,12 @@ namespace HookCore {
 		// try open process with suitable access
 		HANDLE hProc = NULL;
 		if (!services->GetHighAccessProcHandle(pid, &hProc)) {
-			LOG_CORE(services, L"failed to call GetHighAccessProcHandle target Pid=%u\n", pid);
+			LOG_CORE_E(services, L"failed to call GetHighAccessProcHandle target Pid=%u\n", pid);
 			return false;
 		}
 		// deallocate trampoline allocted when ApplyHook
 		if (!VirtualFreeEx(hProc, trampoline_pit, 0, MEM_RELEASE)) {
-			LOG_CORE(services, L"failed to call VirtualFreeEx to free trampoline pit, error: 0x%x\n", GetLastError());
+			LOG_CORE_E(services, L"failed to call VirtualFreeEx to free trampoline pit, error: 0x%x\n", GetLastError());
 			// not a critical error, so we won't return here
 			 //return false;
 		}
@@ -362,7 +362,7 @@ namespace HookCore {
 		sprintf_s(stage_1_func_name, "trampoline_stage_1_num_%03d", hook_id);
 		DWORD stage_1_func_offset = 0;
 		if (!services->CheckExportFromFile(trampFullPath.c_str(), stage_1_func_name, &stage_1_func_offset)) {
-			LOG_CORE(services, L"required export function not found in dll Path=%s\n", trampFullPath.c_str());
+			LOG_CORE_E(services, L"required export function not found in dll Path=%s\n", trampFullPath.c_str());
 			CloseHandle(hProc);
 			return false;
 		}
@@ -377,7 +377,7 @@ namespace HookCore {
 		if (!::ReadProcessMemory(hProc, (LPVOID)((DWORD64)tramp_stage_1_addr + E9_JMP_INSTRUCTION_OPCODE_SIZE),
 			(LPVOID)&e9_jmp_instruction_oprand, E9_JMP_INSTRUCTION_OPRAND_SIZE, &bytesout)) {
 			if (services)
-				LOG_CORE(services, L"failed to call ReadProcessMemory to write trampoline code addr 0x%p to trampoline pit 0x%p, error: 0x%x\n",
+				LOG_CORE_E(services, L"failed to call ReadProcessMemory to write trampoline code addr 0x%p to trampoline pit 0x%p, error: 0x%x\n",
 					tramp_stage_1_addr, trampoline_pit, GetLastError());
 			CloseHandle(hProc);
 			return false;
@@ -389,7 +389,7 @@ namespace HookCore {
 		sprintf_s(stage_2_func_name, "trampoline_stage_2_num_%03d", hook_id);
 		DWORD stage_2_func_offset = 0;
 		if (!services->CheckExportFromFile(trampFullPath.c_str(), stage_2_func_name, &stage_2_func_offset)) {
-			LOG_CORE(services, L"required export function not found in dll Path=%s\n", trampFullPath.c_str());
+			LOG_CORE_E(services, L"required export function not found in dll Path=%s\n", trampFullPath.c_str());
 			CloseHandle(hProc);
 			return false;
 		}
@@ -399,7 +399,7 @@ namespace HookCore {
 		e9_jmp_instruction_oprand = 0;
 		if (!::ReadProcessMemory(hProc, (LPVOID)((DWORD64)tramp_stage_2_addr + E9_JMP_INSTRUCTION_OPCODE_SIZE), (LPVOID)&e9_jmp_instruction_oprand, E9_JMP_INSTRUCTION_OPRAND_SIZE, &bytesout)) {
 			if (services)
-				LOG_CORE(services, L"failed to call WriteProcessMemory to write trampoline code addr 0x%p to trampoline pit 0x%p, error: 0x%x\n",
+				LOG_CORE_E(services, L"failed to call WriteProcessMemory to write trampoline code addr 0x%p to trampoline pit 0x%p, error: 0x%x\n",
 					tramp_stage_1_addr, trampoline_pit, GetLastError());
 			CloseHandle(hProc);
 			return false;
@@ -412,7 +412,7 @@ namespace HookCore {
 
 		// finally remove hook
 		if (!RemoveHookInternal(services, hProc, (PVOID)address, trampoline_dll_base, stage_2_func_offset, ori_asm_code_len)) {
-			LOG_CORE(services, L"failed to call RemoveHookInternal\n");
+			LOG_CORE_E(services, L"failed to call RemoveHookInternal\n");
 			CloseHandle(hProc);
 			return false;
 		}
@@ -433,7 +433,7 @@ namespace HookCore {
 		// try open process with suitable access
 		HANDLE hProc = OpenProcess(PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ | PROCESS_QUERY_INFORMATION, FALSE, pid);
 		if (!hProc) {
-			LOG_CORE(services, L"failed to open target process, error: 0x%x\n", GetLastError());
+			LOG_CORE_E(services, L"failed to open target process, error: 0x%x\n", GetLastError());
 			return false;
 		}
 		DWORD old_protect = 0;
@@ -441,31 +441,31 @@ namespace HookCore {
 		// read out
 		if (!::VirtualProtectEx(hProc, (LPVOID)(ori_asm_code_addr), ori_asm_code_len, PAGE_EXECUTE_READWRITE, &old_protect)) {
 			if (services)
-				LOG_CORE(services, L"DisableHook line number: %d, error code: 0x%x\n", __LINE__, GetLastError());
+				LOG_CORE_E(services, L"DisableHook line number: %d, error code: 0x%x\n", __LINE__, GetLastError());
 			return false;
 		}
 		UCHAR* ori_asm_code = (UCHAR*)malloc(ori_asm_code_len);
 		if (!::ReadProcessMemory(hProc, (LPVOID)(ori_asm_code_addr), (void*)(ori_asm_code), ori_asm_code_len, NULL)) {
-			LOG_CORE(services, L"DisableHook line number: %d, error code: 0x%x\n", __LINE__, GetLastError());
+			LOG_CORE_E(services, L"DisableHook line number: %d, error code: 0x%x\n", __LINE__, GetLastError());
 			return false;
 		}
 		if (!::VirtualProtectEx(hProc, (LPVOID)(ori_asm_code_addr), ori_asm_code_len, old_protect, &old_protect)) {
-			LOG_CORE(services, L"DisableHook line number: %d, error code: 0x%x\n", __LINE__, GetLastError());
+			LOG_CORE_E(services, L"DisableHook line number: %d, error code: 0x%x\n", __LINE__, GetLastError());
 			return false;
 		}
 
 		// write back
 		if (!::VirtualProtectEx(hProc, (LPVOID)(hook_address), ori_asm_code_len, PAGE_EXECUTE_READWRITE, &old_protect)) {
 			if (services)
-				LOG_CORE(services, L"DisableHook line number: %d, error code: 0x%x\n", __LINE__, GetLastError());
+				LOG_CORE_E(services, L"DisableHook line number: %d, error code: 0x%x\n", __LINE__, GetLastError());
 			return false;
 		}
 		if (!::WriteProcessMemory(hProc, (LPVOID)(hook_address), (void*)(ori_asm_code), ori_asm_code_len, NULL)) {
-			LOG_CORE(services, L"DisableHook line number: %d, error code: 0x%x\n", __LINE__, GetLastError());
+			LOG_CORE_E(services, L"DisableHook line number: %d, error code: 0x%x\n", __LINE__, GetLastError());
 			return false;
 		}
 		if (!::VirtualProtectEx(hProc, (LPVOID)(hook_address), ori_asm_code_len, old_protect, &old_protect)) {
-			LOG_CORE(services, L"DisableHook line number: %d, error code: 0x%x\n", __LINE__, GetLastError());
+			LOG_CORE_E(services, L"DisableHook line number: %d, error code: 0x%x\n", __LINE__, GetLastError());
 			return false;
 		}
 
@@ -485,7 +485,7 @@ namespace HookCore {
 		// try open process with suitable access
 		HANDLE hProc = OpenProcess(PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ | PROCESS_QUERY_INFORMATION, FALSE, pid);
 		if (!hProc) {
-			LOG_CORE(services, L"failed to open target process, error: 0x%x\n", GetLastError());
+			LOG_CORE_E(services, L"failed to open target process, error: 0x%x\n", GetLastError());
 			return false;
 		}
 		DWORD old_protect = 0;
@@ -493,17 +493,17 @@ namespace HookCore {
 		// read out
 		if (!::VirtualProtectEx(hProc, (LPVOID)(hook_address), 6, PAGE_EXECUTE_READWRITE, &old_protect)) {
 			if (services)
-				LOG_CORE(services, L"EnableHook line number: %d, error code: 0x%x\n", __LINE__, GetLastError());
+				LOG_CORE_E(services, L"EnableHook line number: %d, error code: 0x%x\n", __LINE__, GetLastError());
 			return false;
 		}
 		UCHAR hook_code[6] = { 0xff,0x25,0,0,0,0 };
 		*(DWORD*)(hook_code + 2) = (DWORD64)trampoline_pit - hook_address - 6;
 		if (!::WriteProcessMemory(hProc, (LPVOID)(hook_address), (void*)(hook_code), 6, NULL)) {
-			LOG_CORE(services, L"EnableHook line number: %d, error code: 0x%x\n", __LINE__, GetLastError());
+			LOG_CORE_E(services, L"EnableHook line number: %d, error code: 0x%x\n", __LINE__, GetLastError());
 			return false;
 		}
 		if (!::VirtualProtectEx(hProc, (LPVOID)(hook_address), 6, old_protect, &old_protect)) {
-			LOG_CORE(services, L"EnableHook line number: %d, error code: 0x%x\n", __LINE__, GetLastError());
+			LOG_CORE_E(services, L"EnableHook line number: %d, error code: 0x%x\n", __LINE__, GetLastError());
 			return false;
 		}
 		return true;
@@ -521,24 +521,24 @@ namespace HookCore {
 		}
 		HANDLE hProc = OpenProcess(PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ | PROCESS_QUERY_INFORMATION, FALSE, pid);
 		if (!hProc) {
-			LOG_CORE(services, L"WritePatchBytesInternal: failed to open process pid=%u, error: 0x%x\n", pid, GetLastError());
+			LOG_CORE_E(services, L"WritePatchBytesInternal: failed to open process pid=%u, error: 0x%x\n", pid, GetLastError());
 			return false;
 		}
 		DWORD old_protect = 0;
 		if (!::VirtualProtectEx(hProc, (LPVOID)address, len, PAGE_EXECUTE_READWRITE, &old_protect)) {
-			LOG_CORE(services, L"WritePatchBytesInternal: VirtualProtectEx failed, error: 0x%x\n", GetLastError());
+			LOG_CORE_E(services, L"WritePatchBytesInternal: VirtualProtectEx failed, error: 0x%x\n", GetLastError());
 			CloseHandle(hProc);
 			return false;
 		}
 		SIZE_T written = 0;
 		if (!services->WriteProcessMemoryWrap(hProc, (LPVOID)address, bytes, len, &written)) {
-			LOG_CORE(services, L"WritePatchBytesInternal: WriteProcessMemoryWrap failed at 0x%llX, pid=%u\n", address, pid);
+			LOG_CORE_E(services, L"WritePatchBytesInternal: WriteProcessMemoryWrap failed at 0x%llX, pid=%u\n", address, pid);
 			::VirtualProtectEx(hProc, (LPVOID)address, len, old_protect, &old_protect);
 			CloseHandle(hProc);
 			return false;
 		}
 		if (!::VirtualProtectEx(hProc, (LPVOID)address, len, old_protect, &old_protect)) {
-			LOG_CORE(services, L"WritePatchBytesInternal: VirtualProtectEx restore failed, error: 0x%x\n", GetLastError());
+			LOG_CORE_E(services, L"WritePatchBytesInternal: VirtualProtectEx restore failed, error: 0x%x\n", GetLastError());
 		}
 		CloseHandle(hProc);
 		return true;
@@ -552,7 +552,7 @@ namespace HookCore {
 		}
 		services->LogCore(L"RemovePatch: restoring %u original bytes at 0x%llX (pid %u).\n", oriLen, address, pid);
 		if (!WritePatchBytesInternal(pid, address, services, oriBytes, oriLen)) {
-			LOG_CORE(services, L"RemovePatch: failed to write original bytes back\n");
+			LOG_CORE_E(services, L"RemovePatch: failed to write original bytes back\n");
 			return false;
 		}
 		return true;
@@ -565,7 +565,7 @@ namespace HookCore {
 		}
 		services->LogCore(L"DisablePatch: restoring %u original bytes at 0x%llX (pid %u).\n", oriLen, address, pid);
 		if (!WritePatchBytesInternal(pid, address, services, oriBytes, oriLen)) {
-			LOG_CORE(services, L"DisablePatch: failed to write original bytes back\n");
+			LOG_CORE_E(services, L"DisablePatch: failed to write original bytes back\n");
 			return false;
 		}
 		return true;
@@ -578,7 +578,7 @@ namespace HookCore {
 		}
 		services->LogCore(L"EnablePatch: writing %u patch bytes at 0x%llX (pid %u).\n", patchLen, address, pid);
 		if (!WritePatchBytesInternal(pid, address, services, patchBytes, patchLen)) {
-			LOG_CORE(services, L"EnablePatch: failed to write patch bytes\n");
+			LOG_CORE_E(services, L"EnablePatch: failed to write patch bytes\n");
 			return false;
 		}
 		return true;

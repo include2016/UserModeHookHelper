@@ -1,4 +1,4 @@
-#include "pch.h"
+﻿#include "pch.h"
 #include "../../Shared/SharedMacroDef.h"
 // Provide minimal NT-style macros often used in shared code so this user-
 // mode translation unit doesn't require NT headers. Define them early so
@@ -65,7 +65,7 @@ Filter::Filter() {
 		&m_Port
 	);
 	if (hResult != S_OK) {
-		LOG_CTRL_ETW(L"failed to call FilterConnectCommunicationPort: 0x%x\n", hResult);
+		LOG_CTRL_ETW_E(L"failed to call FilterConnectCommunicationPort: 0x%x\n", hResult);
 		Helper::Fatal(L"FilterConnectCommunicationPort failed in Filter constructor");
 	}
 	else
@@ -92,7 +92,7 @@ Filter::Filter() {
 				DWORD outbuffer = 0;
 				HRESULT hr2 = FilterSendMessage(m_Port, msg, (DWORD)msgSize, &outbuffer, sizeof(outbuffer), &bytesOut);
 				if ((hr2 != S_OK)||(outbuffer != 0)) {
-					LOG_CTRL_ETW(L"FilterSendMessage(CMD_SET_USER_DIR) failed: 0x%08x\n", hr2);
+					LOG_CTRL_ETW_E(L"FilterSendMessage(CMD_SET_USER_DIR) failed: 0x%08x\n", hr2);
 				} else {
 					// Also persist the user-dir into HKLM registry so the driver can read it on load.
 					HKEY hKey = NULL;
@@ -109,11 +109,11 @@ Filter::Filter() {
 					if (lr == ERROR_SUCCESS && hKey != NULL) {
 						lr = RegSetValueExW(hKey, L"UserDir", 0, REG_SZ, (const BYTE*)buf, (DWORD)bytes);
 						if (lr != ERROR_SUCCESS) {
-							LOG_CTRL_ETW(L"RegSetValueExW(UserDir) failed: %u\n", lr);
+							LOG_CTRL_ETW_E(L"RegSetValueExW(UserDir) failed: %u\n", lr);
 						}
 						RegCloseKey(hKey);
 					} else {
-						LOG_CTRL_ETW(L"RegCreateKeyExW for persist subkey failed: %d\n", lr);
+						LOG_CTRL_ETW_E(L"RegCreateKeyExW for persist subkey failed: %d\n", lr);
 					}
 				}
 				free(msg);
@@ -152,7 +152,7 @@ void Filter::RunListenerLoop() {
 
 		// Use the shared m_ListenerEvent for all overlapped operations.
 		if (!m_ListenerEvent) {
-			LOG_CTRL_ETW(L"RunListenerLoop: m_ListenerEvent not available, aborting\n");
+			LOG_CTRL_ETW_E(L"RunListenerLoop: m_ListenerEvent not available, aborting\n");
 			break;
 		}
 
@@ -171,7 +171,7 @@ void Filter::RunListenerLoop() {
 			// completed synchronously; get the size
 			if (!GetOverlappedResult(m_Port, &ov, &bytesTransferred, FALSE)) {
 				DWORD err = GetLastError();
-				LOG_CTRL_ETW(L"RunListenerLoop: GetOverlappedResult(sync) failed (%u)\n", err);
+				LOG_CTRL_ETW_E(L"RunListenerLoop: GetOverlappedResult(sync) failed (%u)\n", err);
 				if (err == ERROR_OPERATION_ABORTED || err == ERROR_INVALID_HANDLE) break;
 				continue;
 			}
@@ -187,7 +187,7 @@ void Filter::RunListenerLoop() {
 				// message ready
 				if (!GetOverlappedResult(m_Port, &ov, &bytesTransferred, FALSE)) {
 					DWORD err = GetLastError();
-					LOG_CTRL_ETW(L"RunListenerLoop: GetOverlappedResult(wait) failed (%u)\n", err);
+					LOG_CTRL_ETW_E(L"RunListenerLoop: GetOverlappedResult(wait) failed (%u)\n", err);
 					if (err == ERROR_OPERATION_ABORTED || err == ERROR_INVALID_HANDLE) break;
 					continue;
 				}
@@ -196,7 +196,7 @@ void Filter::RunListenerLoop() {
 				continue;
 			}
 		} else {
-			LOG_CTRL_ETW(L"FilterGetMessage failed (async): 0x%08x\n", hr);
+			LOG_CTRL_ETW_E(L"FilterGetMessage failed (async): 0x%08x\n", hr);
 			break;
 		}
 
@@ -390,7 +390,7 @@ bool Filter::FLTCOMM_CheckHookList(const std::wstring& ntPath) {
 
 	if (S_OK != hResult) {
 		free(msg);
-		 LOG_CTRL_ETW(L"failed to call FilterSendMessage: 0x%p\n", hResult);
+		 LOG_CTRL_ETW_E(L"failed to call FilterSendMessage: 0x%p\n", hResult);
 		 Helper::Fatal(L"FilterSendMessage failed in FLTCOMM_CheckHookList");
 		return isInHookList;
 	}
@@ -502,7 +502,7 @@ bool Filter::FLTCOMM_AddHook(const std::wstring& ntPath) {
 		return true;
 	}
 	// Any failure here is considered fatal for the app
-	LOG_CTRL_ETW(L"FLTCOMM_AddHook: failed path=%s\n", ntPath.c_str());
+	LOG_CTRL_ETW_E(L"FLTCOMM_AddHook: failed path=%s\n", ntPath.c_str());
 	SetLastError(21); // ERROR_NOT_READY as sentinel for fatal
 	Helper::Fatal(L"FLTCOMM_AddHook: kernel or IPC failure while adding hook");
 	return false;
@@ -570,7 +570,7 @@ bool Filter::FLTCOMM_IsProcessWow64(DWORD pid, bool& outIsWow64) {
 	ULONG status = (ULONG)(ULONG_PTR)PHLIB::PhGetProcessIsWow64((void*)(ULONG_PTR)pid,
 		(void*)(ULONG_PTR)&IsWow64);
 	if (0 != status) {
-		LOG_CTRL_ETW(L"failed to call PHLIB::PhGetProcessIsWow64, Pid=%u Status=0x%x\n", pid, status);
+		LOG_CTRL_ETW_E(L"failed to call PHLIB::PhGetProcessIsWow64, Pid=%u Status=0x%x\n", pid, status);
 		return false;
 	}
 	outIsWow64 = IsWow64;
@@ -593,7 +593,7 @@ bool Filter::FLTCOMM_IsProtectedProcess(DWORD pid, bool& outIsProtected) {
 	free(msg);
 
 	if (hr != S_OK) {
-		LOG_CTRL_ETW(L"FLTCOMM_IsProtectedProcess: FilterSendMessage failed hr=0x%08x pid=%u\n", hr, pid);
+		LOG_CTRL_ETW_E(L"FLTCOMM_IsProtectedProcess: FilterSendMessage failed hr=0x%08x pid=%u\n", hr, pid);
 		return false;
 	}
 	if (bytesOut == 0) return false;
@@ -626,7 +626,7 @@ bool Filter::FLTCOMM_GetProcessHandle(DWORD pid, HANDLE* outHandle) {
 						// LOG_CTRL_ETW(L"DuplicateHandle failed; trying kernel duplication\n");
 						HANDLE hDupKernel = NULL;
 						if (!FLTCOMM_DuplicateHandleKernel(h, &hDupKernel)) {
-							LOG_CTRL_ETW(L"Kernel duplicate failed, Pid=%d\n",pid);
+							LOG_CTRL_ETW_E(L"Kernel duplicate failed, Pid=%d\n",pid);
 							return false;
 						}
 						hDuplicate = hDupKernel;
@@ -680,7 +680,7 @@ bool Filter::FLTCOMM_GetProcessHandle(DWORD pid, HANDLE* outHandle) {
 		// LOG_CTRL_ETW(L"DuplicateHandle failed; trying kernel duplication\n");
 		HANDLE hDupKernel = NULL;
 		if (!FLTCOMM_DuplicateHandleKernel(hProc, &hDupKernel)) {
-			LOG_CTRL_ETW(L"Kernel duplicate failed\n");
+			LOG_CTRL_ETW_E(L"Kernel duplicate failed\n");
 			return false;
 		}
 		hDuplicate = hDupKernel;
@@ -741,7 +741,7 @@ bool Filter::FLTCOMM_ReadKernelMemory(_In_ LPVOID target_addr, _Out_ LPVOID buff
 		(DWORD)sizeof(reply),
 		&bytesOut);
 	if (hr != S_OK || bytesOut != sizeof(reply) || !reply.UserVa) {
-		LOG_CTRL_ETW(L"FLTCOMM_ReadKernelMemory: map failed hr=0x%08x\n", hr);
+		LOG_CTRL_ETW_E(L"FLTCOMM_ReadKernelMemory: map failed hr=0x%08x\n", hr);
 		return false;
 	}
 
@@ -768,7 +768,7 @@ bool Filter::FLTCOMM_ReadKernelMemory(_In_ LPVOID target_addr, _Out_ LPVOID buff
 		(DWORD)sizeof(freeStatus),
 		&freeBytesOut);
 	if (hr != S_OK || !NT_SUCCESS(freeStatus)) {
-		LOG_CTRL_ETW(L"FLTCOMM_ReadKernelMemory: free_mdl failed hr=0x%08x status=0x%08x\n", hr, freeStatus);
+		LOG_CTRL_ETW_E(L"FLTCOMM_ReadKernelMemory: free_mdl failed hr=0x%08x status=0x%08x\n", hr, freeStatus);
 		return false;
 	}
 	return true;
@@ -801,7 +801,7 @@ bool Filter::FLTCOMM_WriteKernelMemory(_In_ LPVOID target_addr, _Out_ LPVOID buf
 		(DWORD)sizeof(reply),
 		&bytesOut);
 	if (hr != S_OK || bytesOut != sizeof(reply) || !reply.UserVa) {
-		LOG_CTRL_ETW(L"FLTCOMM_WriteKernelMemory: map failed hr=0x%08x\n", hr);
+		LOG_CTRL_ETW_E(L"FLTCOMM_WriteKernelMemory: map failed hr=0x%08x\n", hr);
 		return false;
 	}
 
@@ -828,7 +828,7 @@ bool Filter::FLTCOMM_WriteKernelMemory(_In_ LPVOID target_addr, _Out_ LPVOID buf
 		(DWORD)sizeof(freeStatus),
 		&freeBytesOut);
 	if (hr != S_OK || !NT_SUCCESS(freeStatus)) {
-		LOG_CTRL_ETW(L"FLTCOMM_WriteKernelMemory: free_mdl failed hr=0x%08x status=0x%08x\n", hr, freeStatus);
+		LOG_CTRL_ETW_E(L"FLTCOMM_WriteKernelMemory: free_mdl failed hr=0x%08x status=0x%08x\n", hr, freeStatus);
 		return false;
 	}
 	return true;
@@ -1043,7 +1043,7 @@ bool Filter::FLTCOMM_RemoveHookByHash(ULONGLONG hash) {
 		return true;
 	}
 	// Any failure is fatal in user-mode policy
-	LOG_CTRL_ETW(L"FLTCOMM_RemoveHookByHash: failed hash=0x%I64x\n", hash);
+	LOG_CTRL_ETW_E(L"FLTCOMM_RemoveHookByHash: failed hash=0x%I64x\n", hash);
 	return false;
 }
 

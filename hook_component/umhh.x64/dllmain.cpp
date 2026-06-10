@@ -20,6 +20,8 @@
 #include "internal/hookseq_fields.h"
 #include "internal/event_names.h"
 VOID EtwLog(_In_ PCWSTR Format, ...);
+#define LogD(fmt, ...) EtwLog(L"[MasterDLL]  " fmt, __VA_ARGS__)
+#define LogE(fmt, ...) EtwLog(L"[MasterDLL]  [E] " fmt, __VA_ARGS__)
 typedef PVOID(*PFNGetRdi)();
 PFNGetRdi pGetRdi;
 VOID CopyCharToWchar(WCHAR* dst, CHAR* src, SIZE_T len) {
@@ -264,7 +266,7 @@ _load_config_used = {
 #define WFILE WIDEN(__FILE__)
 
 PVOID GetRdi() {
-	EtwLog(L"this is just palceholder function\n");
+	LogD(L"this is just palceholder function\n");
 	return NULL;
 }
 
@@ -272,7 +274,7 @@ PVOID GetRdi() {
 // x86: placeholder function to get first argument from stack
 // Will be overwritten with: mov eax, [esp+4]; ret
 PVOID GetFirstArg() {
-	EtwLog(L"this is just placeholder function for x86\n");
+	LogD(L"this is just placeholder function for x86\n");
 	return NULL;
 }
 typedef PVOID(*PFNGetFirstArg)();
@@ -318,10 +320,10 @@ ULONG_PTR PutIntoSleep(ULONG_PTR a1,
 		NTSTATUS status = CreateNamedEventByName(&EvtHandle, NotificationEvent, FALSE, &sd, event_name);
 
 		if (status != 0) {
-			EtwLog(L"failed to call NtCreateEvent to create wakeup Event=%s, status=0x%x\n", &event_name, status);
+			LogE(L"failed to call NtCreateEvent to create wakeup Event=%s, status=0x%x\n", &event_name, status);
 		}
 		NtWaitForSingleObject(EvtHandle, FALSE, NULL);
-		EtwLog(L"early break process signaled to wake up\n");
+		LogD(L"early break process signaled to wake up\n");
 		// this is an one time event, no need to reset
 	}
 
@@ -610,7 +612,13 @@ VOID EtwLog(_In_ PCWSTR Format, ...)
 	Buffer[RTL_NUMBER_OF(Buffer) - 1] = L'\0';
 	// Prepend stable prefix unless caller already provided one.
 	if (Buffer[0] == L'[') {
-		EventWriteString(ProviderHandle, 0, 0, Buffer);
+		if (ProviderHandle)
+			EventWriteString(ProviderHandle, 0, 0, Buffer);
+		else {
+			UNICODE_STRING u;
+			RtlInitUnicodeString(&u, Buffer);
+			DbgPrint("%wZ\n", u);
+		}
 	}
 	else {
 		WCHAR Prefixed[1100];
@@ -625,6 +633,8 @@ VOID EtwLog(_In_ PCWSTR Format, ...)
 		}
 	}
 }
+
+
 
 extern "C" __declspec(dllexport) int MASETER_EXP_FUNC_NAME(WCHAR* patbuf, char* dllPath) {
 
@@ -719,7 +729,7 @@ NTSTATUS AgentCode(_In_ PVOID ThreadParameter) {
 		NtWaitForSingleObject(g_EventHandle, FALSE, NULL);
 
 
-		EtwLog(L"current process is signaled to inject a dll\n");
+		LogD(L"current process is signaled to inject a dll\n");
 		char dllPath[MAX_PATH] = { 0 };
 
 		// read out to be injected dll path from code memory, I use an export function as data storage
@@ -751,15 +761,15 @@ NTSTATUS AgentCode(_In_ PVOID ThreadParameter) {
 			ustr->Length = i * sizeof(WCHAR);
 			ustr->MaximumLength = (i + 1) * sizeof(WCHAR);
 
-			EtwLog(L"constructed to be injected dll path: %s\n", buffer);
+			LogD(L"constructed to be injected dll path: %s\n", buffer);
 
 			NTSTATUS st = pLdrLoadDll(0, 0, ustr, (PHANDLE)dllPath);
 			if (st != 0) {
-				EtwLog(L"LdrLoadDll call with DllPath=%s failed with Status=0x%x\n", buffer, st);
+				LogE(L"LdrLoadDll call with DllPath=%s failed with Status=0x%x\n", buffer, st);
 			}
 			else {
 				// signal back to umcontroller
-				EtwLog(L"LdrLoadDll SUCCESS: %s\n", buffer);
+				LogD(L"LdrLoadDll SUCCESS: %s\n", buffer);
 
 				// construct event name
 				WCHAR eventName[150];
@@ -780,11 +790,11 @@ NTSTATUS AgentCode(_In_ PVOID ThreadParameter) {
 				NTSTATUS evtStatus = NtOpenEvent(&hEvent, EVENT_MODIFY_STATE | SYNCHRONIZE, &oa);
 				if (NT_SUCCESS(evtStatus)) {
 					NtSetEvent(hEvent, NULL);
-					EtwLog(L"Signaled injection success: %s\n", eventName);
+					LogD(L"Signaled injection success: %s\n", eventName);
 					NtClose(hEvent);
 				}
 				else {
-					EtwLog(L"Failed to open injection success event (caller may not be waiting): Status=0x%x\n", evtStatus);
+					LogE(L"Failed to open injection success event (caller may not be waiting): Status=0x%x\n", evtStatus);
 				}
 			}
 		}
@@ -865,7 +875,7 @@ OnProcessAttach(
 		HANDLE hMutant;
 		NTSTATUS status = NtCreateMutant(&hMutant, MUTANT_ALL_ACCESS, &oa, TRUE);
 		if (0 != status) {
-			EtwLog(L"NtCreateMutant Name=%s failed, maybe Master DLL has already been loaded, Status=0x%x\n", mutant_name, status);
+			LogE(L"NtCreateMutant Name=%s failed, maybe Master DLL has already been loaded, Status=0x%x\n", mutant_name, status);
 
 			return 0;
 		}
@@ -878,10 +888,10 @@ OnProcessAttach(
 		BUILD_PID_EVENT_NAME(event_name, HOOK_DLL_NT_MASTER_LOADED_SIGNAL_BACK_EVENT);
 		NTSTATUS status = PulseNamedEventByName(event_name);
 		if (!NT_SUCCESS(status)) {
-			EtwLog(L"failed to open event, Name=%s, Status=0x%x\n", event_name, status);
+			LogE(L"failed to open event, Name=%s, Status=0x%x\n", event_name, status);
 		}
 		else {
-			EtwLog(L"Signal back master dll loaded\n");
+			LogD(L"Signal back master dll loaded\n");
 		}
 	}
 
@@ -895,7 +905,7 @@ OnProcessAttach(
 		NTSTATUS status = CreateNamedEventByName(&hEvent, NotificationEvent, FALSE, NULL, event_name);
 
 		if (status != 0) {
-			EtwLog(L"failed to call NtCreateEvent to create master loaded signal Event=%s, status=0x%x\n", &event_name, status);
+			LogE(L"failed to call NtCreateEvent to create master loaded signal Event=%s, status=0x%x\n", &event_name, status);
 		}
 	}
 
@@ -910,7 +920,7 @@ OnProcessAttach(
 		NTSTATUS status = CreateNamedEventByName(&g_EventHandle, NotificationEvent, FALSE, &sd, event_name);
 
 		if (status != 0) {
-			EtwLog(L"failed to call NtCreateEvent to create injection signal Event=%s, status=0x%x\n", &event_name, status);
+			LogE(L"failed to call NtCreateEvent to create injection signal Event=%s, status=0x%x\n", &event_name, status);
 		}
 	}
 
@@ -922,7 +932,7 @@ OnProcessAttach(
 	GetNtPathOfCurrentProcess(NtdllHandle, ntPath, &len);
 	// get hash and check
 	if (CheckSignalFile((UCHAR*)ntPath, len, EARLY_BREAK_SIGNAL_FILE_FMT, TRUE)) {
-		EtwLog(L"current process is marked as early break, now breaking into debugger\n");
+		LogD(L"current process is marked as early break, now breaking into debugger\n");
 
 		// put it into sleep using Detours at PE entry
 		{
@@ -965,7 +975,7 @@ OnProcessAttach(
 				SIZE_T protLen = 0x1000;
 				DWORD trampSize = 4;
 				if (0 != NtProtectVirtualMemory(NtCurrentProcess(), &page_base, &protLen, PAGE_EXECUTE_READWRITE, &oldProt)) {
-					EtwLog(L"failed to call NtProtectVirtualMemory target page_base=0x%p\n", page_base);
+					LogE(L"failed to call NtProtectVirtualMemory target page_base=0x%p\n", page_base);
 					break;
 				}
 				// mov rax, rdi; ret
@@ -986,7 +996,7 @@ OnProcessAttach(
 				DWORD written = 0;
 				SIZE_T protLen = 0x1000;
 				if (0 != NtProtectVirtualMemory(NtCurrentProcess(), &page_base, &protLen, PAGE_EXECUTE_READWRITE, &oldProt)) {
-					EtwLog(L"failed to call NtProtectVirtualMemory target page_base=0x%p\n", page_base);
+					LogE(L"failed to call NtProtectVirtualMemory target page_base=0x%p\n", page_base);
 					break;
 				}
 				// mov eax, ebx; ret
@@ -1002,7 +1012,7 @@ OnProcessAttach(
 			DWORD hook_offset = 0;
 			// Scan delay.hook files and build InstantHook list
 			if (!ScanDelayHookFiles(ntPath, len)) {
-				EtwLog(L"ScanDelayHookFiles failed\n");
+				LogE(L"ScanDelayHookFiles failed\n");
 				break;
 			}
 
@@ -1040,12 +1050,12 @@ OnProcessAttach(
 				{
 					NTSTATUS st = CopyFileWithTimestampFolder(&dllPathUs, outPath, MAX_PATH);
 					if (0 != st) {
-						EtwLog(L"failed to call CopyFileWithTimestampFolder, Error=0x%x\n", st);
-						EtwLog(L"fall back to use original path\n");
+						LogE(L"failed to call CopyFileWithTimestampFolder, Error=0x%x\n", st);
+						LogD(L"fall back to use original path\n");
 						RtlInitUnicodeString(&dllPathUsNew, pNode->dllPath);
 					}
 					else {
-						EtwLog(L"hook code dll path: %s\n", outPath);
+						LogD(L"hook code dll path: %s\n", outPath);
 						/*
 						skip \??\
 						*/
@@ -1057,7 +1067,7 @@ OnProcessAttach(
 				ULONG flags = 0;
 				NTSTATUS loadStatus = pLdrLoadDll(NULL, &flags, &dllPathUsNew, &hModule);
 				if (!NT_SUCCESS(loadStatus)) {
-					EtwLog(L"Failed to load hook code dll: %s, status=0x%x\n", pNode->dllPath, loadStatus);
+					LogE(L"Failed to load hook code dll: %s, status=0x%x\n", pNode->dllPath, loadStatus);
 				}
 				pNode = pNode->next;
 			}
@@ -1066,10 +1076,10 @@ OnProcessAttach(
 				// get hook offset by using capstone
 				hook_offset = FindHookOffset(pLdrLoadDll);
 				if (hook_offset == 0) {
-					EtwLog(L"FindHookOffset failed\n");
+					LogE(L"FindHookOffset failed\n");
 					break;
 				}
-				EtwLog(L"FindHookOffset returned offset=0x%x\n", hook_offset);
+				LogD(L"FindHookOffset returned offset=0x%x\n", hook_offset);
 			}
 
 
@@ -1077,7 +1087,7 @@ OnProcessAttach(
 			PVOID tramp = nullptr;
 			PVOID hookAddr = (PVOID)((uintptr_t)pLdrLoadDll + hook_offset);
 			if (!ApplyLocalHook(hookAddr, (PVOID)LdrLoadDll_HookHandler, &tramp, &oriLen)) {
-				EtwLog(L"NTDLL ApplyLocalHook failed\n");
+				LogE(L"NTDLL ApplyLocalHook failed\n");
 				break;
 			}
 			// try install hook
@@ -1134,10 +1144,10 @@ OnProcessAttach(
 			LARGE_INTEGER bytesOut = { 0 };
 			NtWriteFile(hFile, NULL, NULL, NULL, &iosb, pidBuf, pidLen, &bytesOut, NULL);
 			NtClose(hFile);
-			EtwLog(L"umhh create green light file %s, lua engin can continue now\n", filePath);
+			LogD(L"umhh create green light file %s, lua engin can continue now\n", filePath);
 		}
 		else {
-			EtwLog(L"umhh failed to create green light file %s, Status=0x%x\n", filePath, status);
+			LogE(L"umhh failed to create green light file %s, Status=0x%x\n", filePath, status);
 		}
 	}
 
@@ -1248,7 +1258,7 @@ BOOLEAN GetNtPathOfCurrentProcess(HANDLE NtdllHandle, wchar_t* ntPath, size_t* o
 	if (LdrGetProcedureAddress(NtdllHandle, &aName, 0,
 		(PVOID*)&NtQueryInformationProcess) < 0)
 	{
-		EtwLog(L"can not get function %Z address\n", aName);
+		LogE(L"can not get function %Z address\n", aName);
 		RtlFreeAnsiString(&aName);
 		return FALSE;
 	}
@@ -1265,7 +1275,7 @@ BOOLEAN GetNtPathOfCurrentProcess(HANDLE NtdllHandle, wchar_t* ntPath, size_t* o
 	);
 
 	if (status < 0) {
-		EtwLog(L"failed to call NtQueryInformationProcess, status=0x%x\n", status);
+		LogE(L"failed to call NtQueryInformationProcess, status=0x%x\n", status);
 		return FALSE;
 	}
 
@@ -1899,10 +1909,10 @@ static bool LoadDllFromControllerDir(PFN_LdrLoadDll pLdrLoadDll, const WCHAR* dl
 					ULONG flags = 0;
 					NTSTATUS trampStatus = pLdrLoadDll(NULL, &flags, &trampPathUs, &hTramp);
 					if (!NT_SUCCESS(trampStatus)) {
-						EtwLog(L"Failed to load trampoline.dll: %s, status=0x%x\n", trampDllPath, trampStatus);
+						LogE(L"Failed to load trampoline.dll: %s, status=0x%x\n", trampDllPath, trampStatus);
 					}
 					else {
-						EtwLog(L"Successfully loaded dll, Path=%s\n", trampDllPath);
+						LogD(L"Successfully loaded dll, Path=%s\n", trampDllPath);
 						result = true;
 					}
 				}
@@ -1984,7 +1994,7 @@ static BOOL ScanDelayFile(unsigned long long processFnvHash, const WCHAR* ntFile
 		if (!NT_SUCCESS(st1) || !NT_SUCCESS(st2)) {
 			if (NT_SUCCESS(st1)) NtClose(hLoad);
 			if (NT_SUCCESS(st2)) NtClose(hHook);
-			EtwLog(L"Failed to open hook/load notify event, check if UMController is running\n");
+			LogE(L"Failed to open hook/load notify event, check if UMController is running\n");
 			continue;
 		}
 
@@ -2044,7 +2054,7 @@ void __fastcall LdrLoadDll_HookHandler(PVOID rcx, PVOID rdx, PVOID r8, PVOID r9,
 
 	ULONG forward = 0;
 	USHORT hashCharCount = RemoveDllSuffixFromUnicodeString(fullDllName, &forward);
-	// EtwLog(L"Dll=%s is loaded\n", fullDllName->Buffer + forward);
+	// LogD(L"Dll=%s is loaded\n", fullDllName->Buffer + forward);
 	unsigned long long dllFnvHash = ComputeFnvHash(fullDllName->Buffer + forward, hashCharCount);
 
 	// Traverse InstantHook list
@@ -2072,18 +2082,18 @@ void __fastcall LdrLoadDll_HookHandler(PVOID rcx, PVOID rdx, PVOID r8, PVOID r9,
 			}
 			// Match! Signal LoadNotify and wait for HookNotify
 			if (node->hLoadNotifyEvent) {
-				EtwLog(L"signaling UMController that dll=%s is loaded with event=%llx.%llx.%llx\n", node->targetDllName, processFnvHash, dllFnvHash, node->offset);
+				LogD(L"signaling UMController that dll=%s is loaded with event=%llx.%llx.%llx\n", node->targetDllName, processFnvHash, dllFnvHash, node->offset);
 				NtSetEvent(node->hLoadNotifyEvent, NULL);
 			}
 			if (node->hHookNotifyEvent) {
 				// Wait for UMController to finish applying hook
 				NtWaitForSingleObject(node->hHookNotifyEvent, FALSE, NULL);
 				if (node->hookMode == HOOK_MODE_PATCH)
-					EtwLog(L"being signaled that dll=%s is patched with bytes=%s\n", node->targetDllName, node->patchHex);
+					LogD(L"being signaled that dll=%s is patched with bytes=%s\n", node->targetDllName, node->patchHex);
 				else if (node->hookMode == HOOK_MODE_LUA)
-					EtwLog(L"being signaled that dll=%s is hooked with lua script=%s handler=%s\n", node->targetDllName, node->script, node->handler);
+					LogD(L"being signaled that dll=%s is hooked with lua script=%s handler=%s\n", node->targetDllName, node->script, node->handler);
 				else
-					EtwLog(L"being signaled that dll=%s is hooked with hook code dll=%s\n", node->targetDllName, node->dllPath);
+					LogD(L"being signaled that dll=%s is hooked with hook code dll=%s\n", node->targetDllName, node->dllPath);
 				// Close handles and remove from list
 				CloseHandle(node->hLoadNotifyEvent);
 				CloseHandle(node->hHookNotifyEvent);
@@ -2179,7 +2189,7 @@ NTSTATUS CopyFileWithTimestampFolder(
 		0
 	);
 	if (st != 0) {
-		EtwLog(L"failed to create folder %s, Error=0x%x\n", dir, st);
+		LogE(L"failed to create folder %s, Error=0x%x\n", dir, st);
 		return st;
 	}
 	NtClose(hDst);
@@ -2206,7 +2216,7 @@ NTSTATUS CopyFileWithTimestampFolder(
 		IO_STATUS_BLOCK iosb;
 		NTSTATUS status = NtOpenFile(&hSrc, FILE_GENERIC_READ, &oa, &iosb, FILE_SHARE_READ, FILE_SYNCHRONOUS_IO_NONALERT);
 		if (!NT_SUCCESS(status)) {
-			EtwLog(L"failed to open source file, Path=%s\n", nt_src_file);
+			LogE(L"failed to open source file, Path=%s\n", nt_src_file);
 			return status;
 		}
 	}
@@ -2219,7 +2229,7 @@ NTSTATUS CopyFileWithTimestampFolder(
 		NTSTATUS status = NtCreateFileOverwrite(&hDst, OutPath);
 
 		if (!NT_SUCCESS(status)) {
-			EtwLog(L"failed to open target file, Path=%s\n", OutPath);
+			LogE(L"failed to open target file, Path=%s\n", OutPath);
 			return status;
 		}
 	}

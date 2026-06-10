@@ -1,4 +1,4 @@
-
+﻿
 // UMController.cpp : Defines the class behaviors for the application.
 //
 
@@ -127,7 +127,7 @@ BOOL CUMControllerApp::InitInstance()
 	}
 	
 	if (!Helper::UMHH_ObCallback_DriverCheck()) {
-		LOG_CTRL_ETW(L"failed to register object pre process callback\n");
+		LOG_CTRL_ETW_E(L"failed to register object pre process callback\n");
 	}
 	AfxEnableControlContainer();
 

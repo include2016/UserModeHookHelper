@@ -1,4 +1,4 @@
-#include "pch.h"
+﻿#include "pch.h"
 #include "RemoveHookDlg.h"
 #include "Resource.h"
 #include "Helper.h"
@@ -72,7 +72,7 @@ void CRemoveHookDlg::OnOk() {
         }
         // Persist removal to registry. If persistence fails, attempt rollback
         if (!RegistryStore::RemovePath(path)) {
-            app.GetETW().Log(L"CRemoveHookDlg::OnOk: RegistryStore::RemovePath failed for %s - attempting rollback\n", path.c_str());
+            app.GetETW().Log(L"[UMCtrl]     [E] CRemoveHookDlg::OnOk: RegistryStore::RemovePath failed for %s - attempting rollback\n", path.c_str());
             // try to re-add in kernel
             m_pFilter->FLTCOMM_AddHook(path);
             continue; // skip PM updates for this path since rollback occurred
