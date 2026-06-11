@@ -29,7 +29,7 @@
 #define LOG_CTRL_ETW(fmt, ...) app.GetETW().Log(L"[UMCtrl]     " fmt, __VA_ARGS__)
 #endif
 
-// Error variants — prepend [E] so EtwTracer can highlight them in red.
+// Error variants - prepend [E] so EtwTracer can highlight them in red.
 #ifdef _UMCONTROLLER_ENV_DEFINED
 #define LOG_CTRL_ETW_E(fmt, ...) app.GetETW().Log(L"[UMCtrl] [E] " fmt, __VA_ARGS__)
 #else

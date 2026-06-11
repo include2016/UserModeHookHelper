@@ -177,7 +177,7 @@ namespace HookCore {
 		auto r = DetermineCodeEdge_x86(target_process_ori_asm_code, sizeof(target_process_ori_asm_code), (DWORD)(ULONG_PTR)hook_addr, 6);
 		if (r.type != DecideResultType::SUCCESS) {
 			if (services)
-				LOG_CORE(services, L"DetermineCodeEdge result type: %d\n message: %s\n", r.type, r.message.c_str());
+				LOG_CORE_E(services, L"DetermineCodeEdge result type: %d\n message: %s\n", r.type, r.message.c_str());
 			return false;
 		}
 
@@ -510,7 +510,7 @@ ff 25 44 33 22 11       jmp    DWORD PTR ds:0x11223344
 			auto r = DetermineCodeEdge_x64(target_process_ori_asm_code, sizeof(target_process_ori_asm_code), (DWORD64)hook_addr, 6);
 			if (r.type != DecideResultType::SUCCESS) {
 				if (services)
-					LOG_CORE(services, L"DetermineCodeEdge result type: %d\n message: %s\n", r.type, r.message.c_str());
+					LOG_CORE_E(services, L"DetermineCodeEdge result type: %d\n message: %s\n", r.type, r.message.c_str());
 				return false;
 			}
 
@@ -766,7 +766,7 @@ ff 25 44 33 22 11       jmp    DWORD PTR ds:0x11223344
 		auto r = DetermineCodeEdge_x64(target_process_ori_asm_code, sizeof(target_process_ori_asm_code), (DWORD64)hook_addr, 6);
 		if (r.type != DecideResultType::SUCCESS) {
 			if (services)
-				LOG_CORE(services, L"DetermineCodeEdge result type: %d\t message: %s\n", r.type, r.message.c_str());
+				LOG_CORE_E(services, L"DetermineCodeEdge result type: %d\t message: %s\n", r.type, r.message.c_str());
 			return false;
 		}
 

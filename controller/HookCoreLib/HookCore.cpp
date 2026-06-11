@@ -101,14 +101,14 @@ namespace HookCore {
 
 		if (!hProc) {
 			if (services)
-				services->LogCore(L"failed to open target process, error: 0x%x\n", GetLastError());
+				LOG_CORE_E(services, L"failed to open target process, error: 0x%x\n", GetLastError());
 			return false;
 		}
-		if (address == 0) { if (services) services->LogCore(L"ApplyHook: address is 0 (invalid).\n"); return false; }
+		if (address == 0) { if (services) LOG_CORE_E(services, L"ApplyHook: address is 0 (invalid).\n"); return false; }
 		std::wstring owning = FindOwningModule(pid, address, &module_base);
 		if (owning.empty()) {
 			if (services)
-				services->LogCore(L"ApplyHook: address 0x%llX not within any module for pid %u.\n", address, pid);
+				LOG_CORE_E(services, L"ApplyHook: address 0x%llX not within any module for pid %u.\n", address, pid);
 			return false;
 		}
 		if (!module_base) {
@@ -129,7 +129,7 @@ namespace HookCore {
 			};
 			if (equalsIgnoreCase(owning, X64_DLL) || equalsIgnoreCase(owning, X86_DLL)) {
 				if (services)
-					services->LogCore(L"ApplyHook: refusing to hook master DLL %s (address 0x%llX).\n", owning.c_str(), address);
+					LOG_CORE_E(services, L"ApplyHook: refusing to hook master DLL %s (address 0x%llX).\n", owning.c_str(), address);
 				return false;
 			}
 		}
@@ -139,11 +139,11 @@ namespace HookCore {
 		PVOID master_dll_base = NULL;
 		std::wstring master_dll_module= is64 ? X64_DLL : X86_DLL;
 		if (!services->GetModuleBase( pid, master_dll_module.c_str(), (DWORD64*)&master_dll_base)) {
-			services->LogCore(L"failed to call GetModuleBase target Pid=%u Module=%s\n", pid, master_dll_module.c_str());
+			LOG_CORE_E(services, L"failed to call GetModuleBase target Pid=%u Module=%s\n", pid, master_dll_module.c_str());
 			return false;
 		}
 		if (!master_dll_base) {
-			services->LogCore(L"ApplyHook: master DLL not found in target process (expected %s); aborting trampoline load.\n", is64 ? X64_DLL : X86_DLL);
+			LOG_CORE_E(services, L"ApplyHook: master DLL not found in target process (expected %s); aborting trampoline load.\n", is64 ? X64_DLL : X86_DLL);
 			return false;
 		}
 		else {
@@ -156,7 +156,7 @@ namespace HookCore {
 			trampFullPath = s;
 			// check trampoline dll first, if not exist, then we inject
 			if (!services->GetModuleBase( pid, trampName.c_str(), (DWORD64*)&trampoline_dll_base)) {
-				services->LogCore(L"failed to call GetModuleBase target Pid=%u Module=%s\n", pid ,trampName.c_str());
+				LOG_CORE_E(services, L"failed to call GetModuleBase target Pid=%u Module=%s\n", pid ,trampName.c_str());
 				return false;
 			}
 			if (!trampoline_dll_base) {
@@ -290,12 +290,12 @@ namespace HookCore {
 			return false;
 		}
 		if (address == 0) {
-			services->LogCore(L"RemoveHook: address is 0 (invalid).\n");
+			LOG_CORE_E(services, L"RemoveHook: address is 0 (invalid).\n");
 			return false;
 		}
 		std::wstring owning = FindOwningModule(pid, address, &module_base);
 		if (owning.empty()) {
-			services->LogCore(L"RemoveHook: address 0x%llX not within any module for pid %u.\n", address, pid);
+			LOG_CORE_E(services, L"RemoveHook: address 0x%llX not within any module for pid %u.\n", address, pid);
 			return false;
 		}
 		if (!module_base) {
@@ -311,7 +311,7 @@ namespace HookCore {
 		services->IsModuleLoaded(pid, dllName, dllLoaded);
 		
 		if (!dllLoaded){
-			services->LogCore(L"RemoveHook: master DLL not found in target process (expected %s or %s); aborting trampoline load.\n", X64_DLL, X86_DLL);
+			LOG_CORE_E(services, L"RemoveHook: master DLL not found in target process (expected %s or %s); aborting trampoline load.\n", X64_DLL, X86_DLL);
 			return false;
 		}
 		else {
@@ -516,7 +516,7 @@ namespace HookCore {
 			return false;
 		}
 		if (!bytes || len == 0) {
-			LOG_CORE(services, L"WritePatchBytesInternal: no bytes to write (len=0).\n");
+			LOG_CORE_E(services, L"WritePatchBytesInternal: no bytes to write (len=0).\n");
 			return false;
 		}
 		HANDLE hProc = OpenProcess(PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ | PROCESS_QUERY_INFORMATION, FALSE, pid);

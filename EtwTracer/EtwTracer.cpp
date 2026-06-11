@@ -299,7 +299,7 @@ TraceStart(
 		// If StartTrace failed due to a stale session, clean up and auto-restart
 		// (inspired by eventConsumer's auto-restart mechanism)
 		if (ErrorCode == ERROR_ALREADY_EXISTS || ErrorCode == ERROR_ACCESS_DENIED) {
-			printf("StartTrace failed with %08x — stopping stale session and relaunching\n", ErrorCode);
+			printf("StartTrace failed with %08x - stopping stale session and relaunching\n", ErrorCode);
 			// Stop the stale session
 			BYTE stopBuf[sizeof(EVENT_TRACE_PROPERTIES) + 4096];
 			RtlZeroMemory(stopBuf, sizeof(stopBuf));
@@ -317,7 +317,7 @@ TraceStart(
 				CloseHandle(pi.hProcess);
 				CloseHandle(pi.hThread);
 			}
-			// Clean up and exit — the new instance takes over
+			// Clean up and exit - the new instance takes over
 			if (TraceHandle) CloseTrace(TraceHandle);
 			StopFileLogging();
 			return 0;
@@ -334,7 +334,7 @@ TraceStart(
 	{
 		// If EnableTrace failed, stop stale session and auto-restart
 		// (inspired by eventConsumer's auto-restart mechanism)
-		printf("EnableTrace failed with %08x — stopping session and relaunching\n", ErrorCode);
+		printf("EnableTrace failed with %08x - stopping session and relaunching\n", ErrorCode);
 		BYTE stopBuf[sizeof(EVENT_TRACE_PROPERTIES) + 4096];
 		RtlZeroMemory(stopBuf, sizeof(stopBuf));
 		PEVENT_TRACE_PROPERTIES stopProps = (PEVENT_TRACE_PROPERTIES)stopBuf;

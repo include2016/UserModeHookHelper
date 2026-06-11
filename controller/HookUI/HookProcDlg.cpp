@@ -255,7 +255,7 @@ void HookProcDlg::OnBnClickedApplyHookSequence() {
 		bool is64 = false; m_services->IsProcess64(targetPid, is64);
 		DWORD64 base = 0;
 		if (!m_services->GetModuleBase( targetPid, mod.c_str(), &base) || base == 0) {
-			LOG_UI(m_services,L"HookSeq: module %s not loaded (base=%p), skipping\n", mod.c_str(), (void*)base);
+			LOG_UI_E(m_services,L"HookSeq: module %s not loaded (base=%p), skipping\n", mod.c_str(), (void*)base);
 			continue;
 		}
 		bool ok = true;		DWORD64 offVal = ParseAddressText(off, ok);
@@ -268,8 +268,8 @@ void HookProcDlg::OnBnClickedApplyHookSequence() {
 		}
 		if (!hookOk) {
 			// if any fault detected, we need to roll back and abort
-			LOG_UI(m_services, L"fault detected when trying hooking at Addr=0x%p\n", base + offVal);
-			LOG_UI(m_services, L"Rolling back\n");
+			LOG_UI_E(m_services, L"fault detected when trying hooking at Addr=0x%p\n", base + offVal);
+			LOG_UI_E(m_services, L"Rolling back\n");
 			goto RollBack;
 		}
 		// annotate ExpFunc for the created row by matching address
@@ -313,7 +313,7 @@ RollBack:
 				bool is64 = false; m_services->IsProcess64(targetPid, is64);
 				DWORD64 base = 0;
 				if (!m_services->GetModuleBase( targetPid, mod.c_str(), &base)) {
-					LOG_UI(m_services, L"HookSeq: module %s not loaded\n", mod.c_str());
+					LOG_UI_E(m_services, L"HookSeq: module %s not loaded\n", mod.c_str());
 					continue;
 				}
 				bool ok = true;
@@ -1285,7 +1285,7 @@ bool HookProcDlg::HookCommonCodeLua(DWORD64 module_base, DWORD module_offset, st
 				Sleep(100);
 			}
 			if (!loaded) {
-				LOG_UI(m_services, L"HookCommonCodeLua: %s NOT detected within 5s after injection (pid %u)\n", is64 ? LUA_ENGINE_DLL_X64 : LUA_ENGINE_DLL_Win32, m_pid);
+				LOG_UI_E(m_services, L"HookCommonCodeLua: %s NOT detected within 5s after injection (pid %u)\n", is64 ? LUA_ENGINE_DLL_X64 : LUA_ENGINE_DLL_Win32, m_pid);
 				return false;
 			}
 			LOG_UI(m_services, L"HookCommonCodeLua: %s detected at 0x%llX after injection (pid %u)\n", is64 ? LUA_ENGINE_DLL_X64 : LUA_ENGINE_DLL_Win32, luaEngineBase, m_pid);
@@ -1525,7 +1525,7 @@ void HookProcDlg::OnBnClickedApplyHook() {
 		return;
 	}
 	if (is_pe_64 != is64) {
-		LOG_UI(m_services, L"target process Arch=%s mismatch HookCode.dll Arch=%s\n", is64 ? L"x64" : L"x86", is_pe_64 ? L"x64" : L"x86");
+		LOG_UI_E(m_services, L"target process Arch=%s mismatch HookCode.dll Arch=%s\n", is64 ? L"x64" : L"x86", is_pe_64 ? L"x64" : L"x86");
 		return;
 	}
 
