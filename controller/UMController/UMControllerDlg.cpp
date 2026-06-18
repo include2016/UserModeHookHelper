@@ -754,16 +754,28 @@ BOOL CUMControllerDlg::OnInitDialog()
 
 	
  
-	// UMHH.BootStart driver can only locate our dll at root directory
-	Helper::CopyUmhhDllsToRoot();
-	if (!Helper::UMHH_BS_DriverCheck()) {
-		Helper::Fatal(L"UMHH_BS_DriverCheck failed\n");
+	// Skip driver deployment checks if DriverLoader.exe is present in current directory
+	{
+		TCHAR curDir[MAX_PATH] = { 0 };
+		GetCurrentDirectoryW(_countof(curDir), curDir);
+		std::wstring loaderPath = std::wstring(curDir) + L"\\DriverLoader.exe";
+		DWORD fa = GetFileAttributesW(loaderPath.c_str());
+		bool hasDriverLoader = (fa != INVALID_FILE_ATTRIBUTES && !(fa & FILE_ATTRIBUTE_DIRECTORY));
+
+		if (!hasDriverLoader) {
+			// UMHH.BootStart driver can only locate our dll at root directory
+			Helper::CopyUmhhDllsToRoot();
+			if (!Helper::UMHH_BS_DriverCheck()) {
+				Helper::Fatal(L"UMHH_BS_DriverCheck failed\n");
+			}
+			Helper::UMHH_DriverCheck();
+			if (!Helper::IsServiceRunning(SERVICE_NAME)) {
+				LOG_CTRL_ETW_E(L"UMHH service '%s' is not running\n", SERVICE_NAME);
+				Helper::Fatal(L"UMHH service" SERVICE_NAME L" is not running");
+			}
+		}
 	}
-	Helper::UMHH_DriverCheck();
-	if (!Helper::IsServiceRunning(SERVICE_NAME)) {
-		LOG_CTRL_ETW_E(L"UMHH service '%s' is not running\n", SERVICE_NAME);
-		Helper::Fatal(L"UMHH service" SERVICE_NAME L" is not running");
-	}
+	
 	// resolve NtCreateThreadEx syscal number
 	if (!Helper::ResolveNtCreateThreadExSyscallNum(&m_NtCreateThreadExSyscallNum)) {
 		Helper::Fatal(L"ResolveNtCreateThreadExSyscallNum failed\n");

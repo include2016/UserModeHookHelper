@@ -104,6 +104,18 @@ const FLT_REGISTRATION FilterRegistration = {
 	NULL                             // SectionNotificationCallback
 };
 
+__declspec(dllexport)
+NTSTATUS Mark_GS_Function()
+{
+	char buf[32] = { 0 };
+
+	volatile char *p = buf;
+	p[0] = 1;
+	p[1] = 2;
+
+	return STATUS_SUCCESS;
+}
+
 
 // mainn
 NTSTATUS

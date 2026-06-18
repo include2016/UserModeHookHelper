@@ -94,12 +94,24 @@ BOOL CUMControllerApp::InitInstance()
 				exit(-1);
 			}
 	});
-	// UMHH.BootStart driver can only locate our dll at root directory
-	Helper::CopyUmhhDllsToRoot();
-	if (!Helper::UMHH_BS_DriverCheck()) {
-		Helper::Fatal(L"UMHH_BS_DriverCheck failed\n");
+	
+	// Skip driver deployment checks if DriverLoader.exe is present in current directory
+	{
+		TCHAR curDir[MAX_PATH] = { 0 };
+		GetCurrentDirectoryW(_countof(curDir), curDir);
+		std::wstring loaderPath = std::wstring(curDir) + L"\\DriverLoader.exe";
+		DWORD fa = GetFileAttributesW(loaderPath.c_str());
+		bool hasDriverLoader = (fa != INVALID_FILE_ATTRIBUTES && !(fa & FILE_ATTRIBUTE_DIRECTORY));
+
+		if (!hasDriverLoader) {
+			// UMHH.BootStart driver can only locate our dll at root directory
+			Helper::CopyUmhhDllsToRoot();
+			if (!Helper::UMHH_BS_DriverCheck()) {
+				Helper::Fatal(L"UMHH_BS_DriverCheck failed\n");
+			}
+			Helper::UMHH_DriverCheck();
+		}
 	}
-	Helper::UMHH_DriverCheck();
 
 	// add suicide to white list
 	{

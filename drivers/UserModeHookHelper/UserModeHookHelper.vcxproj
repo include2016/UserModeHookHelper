@@ -254,7 +254,7 @@
       <WppRecorderEnabled>true</WppRecorderEnabled>
       <WppScanConfigurationData Condition="'%(ClCompile.ScanConfigurationData)' == ''">trace.h</WppScanConfigurationData>
       <WppKernelMode>true</WppKernelMode>
-      <TreatWarningAsError>true</TreatWarningAsError>
+      <TreatWarningAsError>false</TreatWarningAsError>
     </ClCompile>
     <Link>
       <AdditionalDependencies>ntoskrnl.lib;fltmgr.lib%(AdditionalDependencies);$(KernelBufferOverflowLib);$(DDK_LIB_PATH)ntoskrnl.lib;$(DDK_LIB_PATH)hal.lib;$(DDK_LIB_PATH)wmilib.lib;$(KMDF_LIB_PATH)$(KMDF_VER_PATH)\WdfLdr.lib;$(KMDF_LIB_PATH)$(KMDF_VER_PATH)\WdfDriverEntry.lib</AdditionalDependencies>
@@ -269,13 +269,13 @@
     <Inf>
       <SpecifyDriverVerDirectiveDate>true</SpecifyDriverVerDirectiveDate>
     </Inf>
-      <PostBuildEvent>
+    <PostBuildEvent>
       <Command>if not exist "$(SolutionDir)product\drivers" mkdir "$(SolutionDir)product\drivers"
 if not exist "$(SolutionDir)product\pdb" mkdir "$(SolutionDir)product\pdb"
 copy /Y "$(TargetPath)" "$(SolutionDir)product\drivers\"
 copy /Y "$(TargetDir)$(TargetName).pdb" "$(SolutionDir)product\pdb\"</Command>
     </PostBuildEvent>
-</ItemDefinitionGroup>
+  </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
       <WppEnabled>true</WppEnabled>

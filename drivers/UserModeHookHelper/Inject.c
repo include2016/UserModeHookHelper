@@ -17,17 +17,6 @@ typedef struct _INJ_SYSTEM_DLL_DESCRIPTOR
 	INJ_SYSTEM_DLL  Flag;
 } INJ_SYSTEM_DLL_DESCRIPTOR, *PINJ_SYSTEM_DLL_DESCRIPTOR;
 
-
-INJ_SYSTEM_DLL_DESCRIPTOR InjpSystemDlls[] = {
-  { RTL_CONSTANT_STRING(L"\\SysWow64\\ntdll.dll"),    INJ_SYSWOW64_NTDLL_LOADED    },
-  { RTL_CONSTANT_STRING(L"\\System32\\ntdll.dll"),    INJ_SYSTEM32_NTDLL_LOADED    },
-  { RTL_CONSTANT_STRING(L"\\System32\\wow64.dll"),    INJ_SYSTEM32_WOW64_LOADED    },
-  { RTL_CONSTANT_STRING(L"\\System32\\wow64win.dll"), INJ_SYSTEM32_WOW64WIN_LOADED },
-  { RTL_CONSTANT_STRING(L"\\System32\\wow64cpu.dll"), INJ_SYSTEM32_WOW64CPU_LOADED },
-  { RTL_CONSTANT_STRING(L"\\System32\\wowarmhw.dll"), INJ_SYSTEM32_WOWARMHW_LOADED },
-  { RTL_CONSTANT_STRING(L"\\System32\\xtajit.dll"),   INJ_SYSTEM32_XTAJIT_LOADED   },
-};
-
 BOOLEAN
 KeInsertQueueApc(
 	IN  PKAPC Apc,
@@ -42,72 +31,7 @@ typedef enum _KAPC_ENVIRONMENT {
 	CurrentApcEnvironment,
 	InsertApcEnvironment
 } KAPC_ENVIRONMENT;
-/*
-klif!InjpThunkX86:
-fffff800`46b76010 83ec08          sub     esp,8
-fffff800`46b76013 0fb7442414      movzx   eax,word ptr [rsp+14h]
-fffff800`46b76018 66890424        mov     word ptr [rsp],ax
-fffff800`46b7601c 6689442402      mov     word ptr [rsp+2],ax
-fffff800`46b76021 8b442410        mov     eax,dword ptr [rsp+10h]
-fffff800`46b76025 89442404        mov     dword ptr [rsp+4],eax
-fffff800`46b76029 8d442414        lea     eax,[rsp+14h]
-fffff800`46b7602d 50              push    rax
-fffff800`46b7602e 8d442404        lea     eax,[rsp+4]
-fffff800`46b76032 50              push    rax
-fffff800`46b76033 6a00            push    0
-fffff800`46b76035 6a00            push    0
-fffff800`46b76037 ff54241c        call    qword ptr [rsp+1Ch]
-fffff800`46b7603b 83c408          add     esp,8
-fffff800`46b7603e c20c00          ret     0Ch
-*/
 
-UCHAR InjpThunkX86[] = {              //
-  0x83, 0xec, 0x08,                   // sub    esp,0x8
-  0x0f, 0xb7, 0x44, 0x24, 0x14,       // movzx  eax,[esp + 0x14]
-  0x66, 0x89, 0x04, 0x24,             // mov    [esp],ax
-  0x66, 0x89, 0x44, 0x24, 0x02,       // mov    [esp + 0x2],ax
-  0x8b, 0x44, 0x24, 0x10,             // mov    eax,[esp + 0x10]
-  0x89, 0x44, 0x24, 0x04,             // mov    [esp + 0x4],eax
-  0x8d, 0x44, 0x24, 0x14,             // lea    eax,[esp + 0x14]
-  0x50,                               // push   eax
-  0x8d, 0x44, 0x24, 0x04,             // lea    eax,[esp + 0x4]
-  0x50,                               // push   eax
-  0x6a, 0x00,                         // push   0x0
-  0x6a, 0x00,                         // push   0x0
-  0xff, 0x54, 0x24, 0x1c,             // call   [esp + 0x1c]
-  0x83, 0xc4, 0x08,                   // add    esp,0x8
-  0xc2, 0x0c, 0x00,                   // ret    0xc
-};                                    //
-/*
-klif!InjpThunkX64:
-fffff800`46b76048 4883ec38        sub     rsp,38h
-fffff800`46b7604c 4889c8          mov     rax,rcx
-fffff800`46b7604f 664489442420    mov     word ptr [rsp+20h],r8w
-fffff800`46b76055 664489442422    mov     word ptr [rsp+22h],r8w
-fffff800`46b7605b 4c8d4c2440      lea     r9,[rsp+40h]
-fffff800`46b76060 4889542428      mov     qword ptr [rsp+28h],rdx
-fffff800`46b76065 4c8d442420      lea     r8,[rsp+20h]
-fffff800`46b7606a 31d2            xor     edx,edx
-fffff800`46b7606c 31c9            xor     ecx,ecx
-fffff800`46b7606e ffd0            call    rax
-fffff800`46b76070 4883c438        add     rsp,38h
-fffff800`46b76074 c20000          ret     0
-
-*/
-UCHAR InjpThunkX64[] = {              //
-  0x48, 0x83, 0xec, 0x38,             // sub    rsp,0x38
-  0x48, 0x89, 0xc8,                   // mov    rax,rcx
-  0x66, 0x44, 0x89, 0x44, 0x24, 0x20, // mov    [rsp+0x20],r8w
-  0x66, 0x44, 0x89, 0x44, 0x24, 0x22, // mov    [rsp+0x22],r8w
-  0x4c, 0x8d, 0x4c, 0x24, 0x40,       // lea    r9,[rsp+0x40]
-  0x48, 0x89, 0x54, 0x24, 0x28,       // mov    [rsp+0x28],rdx
-  0x4c, 0x8d, 0x44, 0x24, 0x20,       // lea    r8,[rsp+0x20]
-  0x31, 0xd2,                         // xor    edx,edx
-  0x31, 0xc9,                         // xor    ecx,ecx
-  0xff, 0xd0,                         // call   rax
-  0x48, 0x83, 0xc4, 0x38,             // add    rsp,0x38
-  0xc2, 0x00, 0x00,                   // ret    0x0
-};
 
 typedef struct _INJ_THUNK
 {
@@ -118,10 +42,7 @@ typedef struct _INJ_THUNK
 static BOOLEAN s_IsWin7;
 static LIST_ENTRY s_PendingInjectList;
 static KSPIN_LOCK s_PendingInjectLock;
-static INJ_THUNK       InjThunk[2] = {
-  { InjpThunkX86,   sizeof(InjpThunkX86)   },
-  { InjpThunkX64,   sizeof(InjpThunkX64)   }
-};
+
 
 VOID Inject_CheckWin7() {
 
@@ -244,6 +165,76 @@ BOOLEAN Inject_CanInject(PPENDING_INJECT injInfo) {
 // Placeholder injection function to be implemented later
 NTSTATUS Inject_Perform(PPENDING_INJECT InjectionInfo)
 {
+/*
+klif!InjpThunkX86:
+fffff800`46b76010 83ec08          sub     esp,8
+fffff800`46b76013 0fb7442414      movzx   eax,word ptr [rsp+14h]
+fffff800`46b76018 66890424        mov     word ptr [rsp],ax
+fffff800`46b7601c 6689442402      mov     word ptr [rsp+2],ax
+fffff800`46b76021 8b442410        mov     eax,dword ptr [rsp+10h]
+fffff800`46b76025 89442404        mov     dword ptr [rsp+4],eax
+fffff800`46b76029 8d442414        lea     eax,[rsp+14h]
+fffff800`46b7602d 50              push    rax
+fffff800`46b7602e 8d442404        lea     eax,[rsp+4]
+fffff800`46b76032 50              push    rax
+fffff800`46b76033 6a00            push    0
+fffff800`46b76035 6a00            push    0
+fffff800`46b76037 ff54241c        call    qword ptr [rsp+1Ch]
+fffff800`46b7603b 83c408          add     esp,8
+fffff800`46b7603e c20c00          ret     0Ch
+*/
+
+	UCHAR InjpThunkX86[] = {              //
+	  0x83, 0xec, 0x08,                   // sub    esp,0x8
+	  0x0f, 0xb7, 0x44, 0x24, 0x14,       // movzx  eax,[esp + 0x14]
+	  0x66, 0x89, 0x04, 0x24,             // mov    [esp],ax
+	  0x66, 0x89, 0x44, 0x24, 0x02,       // mov    [esp + 0x2],ax
+	  0x8b, 0x44, 0x24, 0x10,             // mov    eax,[esp + 0x10]
+	  0x89, 0x44, 0x24, 0x04,             // mov    [esp + 0x4],eax
+	  0x8d, 0x44, 0x24, 0x14,             // lea    eax,[esp + 0x14]
+	  0x50,                               // push   eax
+	  0x8d, 0x44, 0x24, 0x04,             // lea    eax,[esp + 0x4]
+	  0x50,                               // push   eax
+	  0x6a, 0x00,                         // push   0x0
+	  0x6a, 0x00,                         // push   0x0
+	  0xff, 0x54, 0x24, 0x1c,             // call   [esp + 0x1c]
+	  0x83, 0xc4, 0x08,                   // add    esp,0x8
+	  0xc2, 0x0c, 0x00,                   // ret    0xc
+	};                                    //
+	/*
+	klif!InjpThunkX64:
+	fffff800`46b76048 4883ec38        sub     rsp,38h
+	fffff800`46b7604c 4889c8          mov     rax,rcx
+	fffff800`46b7604f 664489442420    mov     word ptr [rsp+20h],r8w
+	fffff800`46b76055 664489442422    mov     word ptr [rsp+22h],r8w
+	fffff800`46b7605b 4c8d4c2440      lea     r9,[rsp+40h]
+	fffff800`46b76060 4889542428      mov     qword ptr [rsp+28h],rdx
+	fffff800`46b76065 4c8d442420      lea     r8,[rsp+20h]
+	fffff800`46b7606a 31d2            xor     edx,edx
+	fffff800`46b7606c 31c9            xor     ecx,ecx
+	fffff800`46b7606e ffd0            call    rax
+	fffff800`46b76070 4883c438        add     rsp,38h
+	fffff800`46b76074 c20000          ret     0
+
+	*/
+	UCHAR InjpThunkX64[] = {              //
+	  0x48, 0x83, 0xec, 0x38,             // sub    rsp,0x38
+	  0x48, 0x89, 0xc8,                   // mov    rax,rcx
+	  0x66, 0x44, 0x89, 0x44, 0x24, 0x20, // mov    [rsp+0x20],r8w
+	  0x66, 0x44, 0x89, 0x44, 0x24, 0x22, // mov    [rsp+0x22],r8w
+	  0x4c, 0x8d, 0x4c, 0x24, 0x40,       // lea    r9,[rsp+0x40]
+	  0x48, 0x89, 0x54, 0x24, 0x28,       // mov    [rsp+0x28],rdx
+	  0x4c, 0x8d, 0x44, 0x24, 0x20,       // lea    r8,[rsp+0x20]
+	  0x31, 0xd2,                         // xor    edx,edx
+	  0x31, 0xc9,                         // xor    ecx,ecx
+	  0xff, 0xd0,                         // call   rax
+	  0x48, 0x83, 0xc4, 0x38,             // add    rsp,0x38
+	  0xc2, 0x00, 0x00,                   // ret    0x0
+	};
+	 INJ_THUNK       InjThunk[2] = {
+	 { InjpThunkX86,   sizeof(InjpThunkX86)   },
+	 { InjpThunkX64,   sizeof(InjpThunkX64)   }
+	};
 	NTSTATUS status = STATUS_SUCCESS;
 
 	// Validate parameters
@@ -672,6 +663,18 @@ VOID Inject_CheckAndQueue(PUNICODE_STRING ImageName, PEPROCESS Process,BOOLEAN F
 
 VOID Inject_OnImageLoad(PUNICODE_STRING FullImageName, PEPROCESS Process, PIMAGE_INFO ImageInfo)
 {
+
+
+	INJ_SYSTEM_DLL_DESCRIPTOR InjpSystemDlls[] = {
+	  { RTL_CONSTANT_STRING(L"\\SysWow64\\ntdll.dll"),    INJ_SYSWOW64_NTDLL_LOADED    },
+	  { RTL_CONSTANT_STRING(L"\\System32\\ntdll.dll"),    INJ_SYSTEM32_NTDLL_LOADED    },
+	  { RTL_CONSTANT_STRING(L"\\System32\\wow64.dll"),    INJ_SYSTEM32_WOW64_LOADED    },
+	  { RTL_CONSTANT_STRING(L"\\System32\\wow64win.dll"), INJ_SYSTEM32_WOW64WIN_LOADED },
+	  { RTL_CONSTANT_STRING(L"\\System32\\wow64cpu.dll"), INJ_SYSTEM32_WOW64CPU_LOADED },
+	  { RTL_CONSTANT_STRING(L"\\System32\\wowarmhw.dll"), INJ_SYSTEM32_WOWARMHW_LOADED },
+	  { RTL_CONSTANT_STRING(L"\\System32\\xtajit.dll"),   INJ_SYSTEM32_XTAJIT_LOADED   },
+	};
+
 	if (!FullImageName || FullImageName->Length == 0) return;
 	// get injection info and check if we can inject now
 	PPENDING_INJECT injectionInfo = Inject_GetPendingInj(Process);
