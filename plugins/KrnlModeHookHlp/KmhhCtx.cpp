@@ -2,6 +2,8 @@
 static IHookServices* ctx_services;
 static PVOID trampoline_drv_base;
 static PVOID dbg_prompt_abs_addr;
+static BOOL signed_trampoline_mode = FALSE;
+
 
 VOID KmhhCtx_SetHookServices(IHookServices* services) {
 	ctx_services = services;
@@ -22,4 +24,11 @@ VOID KmhhCtx_SetDbgPromptAbsAddr(PVOID addr) {
 }
 PVOID KmhhCtx_GetDbgPromptAbsAddr() {
 	return dbg_prompt_abs_addr;
+}
+
+VOID KmhhCtx_SetSignedTrampolineMode(BOOL enabled) {
+	signed_trampoline_mode = enabled;
+}
+BOOL KmhhCtx_IsSignedTrampolineMode() {
+	return signed_trampoline_mode;
 }

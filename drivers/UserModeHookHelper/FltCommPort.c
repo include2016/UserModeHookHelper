@@ -57,6 +57,9 @@ static NTSTATUS Handle_WriteProcessMemory(PCOMM_CONTEXT CallerCtx, PUMHH_COMMAND
 static NTSTATUS Handle_DuplicateHandleKernel(PCOMM_CONTEXT CallerCtx, PUMHH_COMMAND_MESSAGE msg, ULONG InputBufferSize, PVOID OutputBuffer, ULONG OutputBufferSize, PULONG ReturnOutputBufferLength);
 static NTSTATUS Handle_MapKernelToUser(PUMHH_COMMAND_MESSAGE msg, ULONG InputBufferSize, PVOID OutputBuffer, ULONG OutputBufferSize, PULONG ReturnOutputBufferLength);
 static NTSTATUS Handle_FreeMdl(PUMHH_COMMAND_MESSAGE msg, ULONG InputBufferSize, PVOID OutputBuffer, ULONG OutputBufferSize, PULONG ReturnOutputBufferLength);
+static NTSTATUS Handle_GetProcessCommandLine(PUMHH_COMMAND_MESSAGE msg, ULONG InputBufferSize, PVOID OutputBuffer, ULONG OutputBufferSize, PULONG ReturnOutputBufferLength);
+static NTSTATUS Handle_DisableObProcessCallbacks(PUMHH_COMMAND_MESSAGE msg, ULONG InputBufferSize, PVOID OutputBuffer, ULONG OutputBufferSize, PULONG ReturnOutputBufferLength);
+static NTSTATUS Handle_RestoreObProcessCallbacks(PUMHH_COMMAND_MESSAGE msg, ULONG InputBufferSize, PVOID OutputBuffer, ULONG OutputBufferSize, PULONG ReturnOutputBufferLength);
 // Removed: Module watch handlers - module watch now implemented in user-mode
 // static NTSTATUS Handle_RegisterModuleWatch(PUMHH_COMMAND_MESSAGE msg, ULONG InputBufferSize, PVOID OutputBuffer, ULONG OutputBufferSize, PULONG ReturnOutputBufferLength);
 // static NTSTATUS Handle_UnregisterModuleWatch(PUMHH_COMMAND_MESSAGE msg, ULONG InputBufferSize, PVOID OutputBuffer, ULONG OutputBufferSize, PULONG ReturnOutputBufferLength);
@@ -384,6 +387,15 @@ Comm_MessageNotify(
 		break;
 	case CMD_FREE_MDL:
 		status = Handle_FreeMdl(msg, InputBufferSize, OutputBuffer, OutputBufferSize, ReturnOutputBufferLength);
+		break;
+	case CMD_GET_PROCESS_COMMAND_LINE:
+		status = Handle_GetProcessCommandLine(msg, InputBufferSize, OutputBuffer, OutputBufferSize, ReturnOutputBufferLength);
+		break;
+	case CMD_DISABLE_OB_PROCESS_CALLBACKS:
+		status = Handle_DisableObProcessCallbacks(msg, InputBufferSize, OutputBuffer, OutputBufferSize, ReturnOutputBufferLength);
+		break;
+	case CMD_RESTORE_OB_PROCESS_CALLBACKS:
+		status = Handle_RestoreObProcessCallbacks(msg, InputBufferSize, OutputBuffer, OutputBufferSize, ReturnOutputBufferLength);
 		break;
 
 	// Removed: Module watch commands - module watch now implemented in user-mode
@@ -1082,6 +1094,155 @@ Handle_GetImagePathByPid(
 	}
 	ExFreePool(imageName);
 	ObDereferenceObject(process);
+	return status;
+}
+
+// Read the command line of a target process from PEB->ProcessParameters->CommandLine.
+// For PPL processes, temporarily lowers protection to allow access
+// and restores it after reading. Reply format matches Handle_GetImagePathByPid:
+//   success: null-terminated WCHAR[] in OutputBuffer
+//   failure: NTSTATUS in OutputBuffer
+static NTSTATUS
+Handle_GetProcessCommandLine(
+	PUMHH_COMMAND_MESSAGE msg,
+	ULONG InputBufferSize,
+	PVOID OutputBuffer,
+	ULONG OutputBufferSize,
+	PULONG ReturnOutputBufferLength
+)
+{
+	if (InputBufferSize < ((ULONG)UMHH_MSG_HEADER_SIZE + (ULONG)sizeof(DWORD))) {
+		if (ReturnOutputBufferLength) *ReturnOutputBufferLength = 0;
+		return STATUS_BUFFER_TOO_SMALL;
+	}
+
+	DWORD pid = 0;
+	RtlCopyMemory(&pid, msg->m_Data, sizeof(DWORD));
+
+	// Get EPROCESS
+	PEPROCESS ep = NULL;
+	NTSTATUS status = PsLookupProcessByProcessId((HANDLE)(ULONG_PTR)pid, &ep);
+	if (!NT_SUCCESS(status) || ep == NULL) {
+		if (ReturnOutputBufferLength) *ReturnOutputBufferLength = 0;
+		if (OutputBuffer && OutputBufferSize >= sizeof(NTSTATUS))
+			RtlCopyMemory(OutputBuffer, &status, sizeof(NTSTATUS));
+		return status;
+	}
+
+	// Get kernel offsets (needed for PebOffset)
+	EPROCESS_OFFSETS off;
+	if (!KO_GetEprocessOffsets(&off)) {
+		ObDereferenceObject(ep);
+		if (ReturnOutputBufferLength) *ReturnOutputBufferLength = 0;
+		status = STATUS_NOT_SUPPORTED;
+		if (OutputBuffer && OutputBufferSize >= sizeof(NTSTATUS))
+			RtlCopyMemory(OutputBuffer, &status, sizeof(NTSTATUS));
+		return status;
+	}
+
+	// Read command line from PEB
+	PWCHAR cmdlineBuf = NULL;
+	ULONG cmdlineBytes = 0;
+	status = STATUS_UNSUCCESSFUL;
+
+	BOOLEAN isWow64 = (PsGetProcessWow64Process(ep) != NULL);
+
+	KAPC_STATE apc;
+	KeStackAttachProcess(ep, &apc);
+	__try {
+		PVOID pebAddr = NULL;
+		ULONG processParamsOff = 0;
+		ULONG cmdlineOff = 0;
+
+		if (isWow64) {
+			// WoW64 process: the native x64 PEB still has valid ProcessParameters
+			// pointing to the same RTL_USER_PROCESS_PARAMETERS which contains
+			// the same CommandLine visible to both 32-bit and 64-bit code.
+			pebAddr = *(PVOID*)((PUCHAR)ep + off.PebOffset);
+			processParamsOff = 0x20; // x64 PEB->ProcessParameters (stable user-mode offset)
+			cmdlineOff = 0x70;       // x64 RTL_USER_PROCESS_PARAMETERS->CommandLine
+		} else {
+			// Native x64 process
+			pebAddr = *(PVOID*)((PUCHAR)ep + off.PebOffset);
+			processParamsOff = 0x20; // x64 PEB->ProcessParameters (stable user-mode offset)
+			cmdlineOff = 0x70;       // x64 RTL_USER_PROCESS_PARAMETERS->CommandLine
+		}
+
+		if (!pebAddr) {
+			// System/kernel processes have no PEB — expected, not an error.
+			status = STATUS_UNSUCCESSFUL;
+			KeUnstackDetachProcess(&apc);
+			goto restore_and_cleanup;
+		}
+
+		// Read ProcessParameters pointer from PEB
+		PVOID processParams = *(PVOID*)((PUCHAR)pebAddr + processParamsOff);
+		if (!processParams) {
+			Log(L"Handle_GetProcessCommandLine: ProcessParameters is NULL, PID=%u\n", pid);
+			status = STATUS_UNSUCCESSFUL;
+			KeUnstackDetachProcess(&apc);
+			goto restore_and_cleanup;
+		}
+
+		// Read CommandLine UNICODE_STRING from ProcessParameters
+		UNICODE_STRING cmdLineUs;
+		RtlZeroMemory(&cmdLineUs, sizeof(UNICODE_STRING));
+		RtlCopyMemory(&cmdLineUs, (PUCHAR)processParams + cmdlineOff, sizeof(UNICODE_STRING));
+
+		if (!cmdLineUs.Buffer || cmdLineUs.Length == 0) {
+			Log(L"Handle_GetProcessCommandLine: CommandLine is empty, PID=%u\n", pid);
+			status = STATUS_UNSUCCESSFUL;
+			KeUnstackDetachProcess(&apc);
+			goto restore_and_cleanup;
+		}
+
+		// Cap at 32KB to prevent oversized allocation
+		if (cmdLineUs.Length > 32 * 1024) {
+			cmdLineUs.Length = 32 * 1024;
+		}
+
+		cmdlineBytes = cmdLineUs.Length;
+		cmdlineBuf = (PWCHAR)ExAllocatePoolWithTag(NonPagedPool, cmdlineBytes + sizeof(WCHAR), tag_port);
+		if (!cmdlineBuf) {
+			Log(L"Handle_GetProcessCommandLine: failed to allocate cmdline buffer\n");
+			KeUnstackDetachProcess(&apc);
+			status = STATUS_NO_MEMORY;
+			goto restore_and_cleanup;
+		}
+
+		RtlCopyMemory(cmdlineBuf, cmdLineUs.Buffer, cmdLineUs.Length);
+		cmdlineBuf[cmdLineUs.Length / sizeof(WCHAR)] = L'\0';
+		status = STATUS_SUCCESS;
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER) {
+		status = GetExceptionCode();
+		Log(L"Handle_GetProcessCommandLine: exception 0x%x reading PEB, PID=%u\n", status, pid);
+	}
+	KeUnstackDetachProcess(&apc);
+
+restore_and_cleanup:
+	// Write output
+	if (NT_SUCCESS(status) && cmdlineBuf) {
+		ULONG bytesNeeded = cmdlineBytes + sizeof(WCHAR); // include NUL
+		if (OutputBuffer && OutputBufferSize >= bytesNeeded) {
+			RtlCopyMemory(OutputBuffer, cmdlineBuf, bytesNeeded);
+			if (ReturnOutputBufferLength) *ReturnOutputBufferLength = bytesNeeded;
+		} else {
+			if (ReturnOutputBufferLength) *ReturnOutputBufferLength = bytesNeeded;
+			status = STATUS_BUFFER_TOO_SMALL;
+			if (OutputBuffer && OutputBufferSize >= sizeof(NTSTATUS))
+				RtlCopyMemory(OutputBuffer, &status, sizeof(NTSTATUS));
+		}
+		ExFreePoolWithTag(cmdlineBuf, tag_port);
+	} else {
+		// Failure: put NTSTATUS in output
+		if (ReturnOutputBufferLength) *ReturnOutputBufferLength = 0;
+		if (OutputBuffer && OutputBufferSize >= sizeof(NTSTATUS))
+			RtlCopyMemory(OutputBuffer, &status, sizeof(NTSTATUS));
+		if (cmdlineBuf) ExFreePoolWithTag(cmdlineBuf, tag_port);
+	}
+
+	ObDereferenceObject(ep);
 	return status;
 }
 
@@ -1884,6 +2045,275 @@ static NTSTATUS Handle_FreeMdl(PUMHH_COMMAND_MESSAGE msg, ULONG InputBufferSize,
 // 	if (ReturnOutputBufferLength) *ReturnOutputBufferLength = sizeof(NTSTATUS);
 // 	return status;
 // }
+
+// --- ObProcessCallback patch support ---
+// Structure definitions based on WinObjEx64 verified offsets.
+// The original code used wrong offsets (0x18/0x20) for PreCallback/PostCallback,
+// which actually pointed to Registration and ObjectType pointers — patching those
+// caused BSOD. The correct offsets are 0x28 and 0x30 per OB_CALLBACK_CONTEXT_BLOCK.
+
+// OB_CALLBACK_CONTEXT_BLOCK (x64 layout):
+//   +0x00 LIST_ENTRY CallbackListEntry
+//   +0x10 OB_OPERATION Operations
+//   +0x14 ULONG Flags
+//   +0x18 _OB_REGISTRATION* Registration
+//   +0x20 POBJECT_TYPE ObjectType
+//   +0x28 PVOID PreCallback
+//   +0x30 PVOID PostCallback
+//   +0x38 EX_RUNDOWN_REF RundownReference
+typedef struct _UMHH_OB_CALLBACK_CONTEXT_BLOCK {
+	LIST_ENTRY CallbackListEntry;
+	ULONG Operations;  // OB_OPERATION
+	ULONG Flags;
+	PVOID Registration;
+	PVOID ObjectType;
+	PVOID PreCallback;
+	PVOID PostCallback;
+	LONGLONG RundownReference; // EX_RUNDOWN_REF (8 bytes on x64)
+} UMHH_OB_CALLBACK_CONTEXT_BLOCK, *PUMHH_OB_CALLBACK_CONTEXT_BLOCK;
+
+// _OB_REGISTRATION (x64 layout, matching WinObjEx64):
+//   +0x00 USHORT Version
+//   +0x02 USHORT RegistrationCount
+//   +0x08 PVOID RegistrationContext  (4-byte padding before pointer)
+//   +0x10 UNICODE_STRING Altitude
+//   +0x20 CALLBACK_CONTEXT_BLOCK* CallbackContext
+typedef struct _UMHH_OB_REGISTRATION {
+	USHORT Version;
+	USHORT RegistrationCount;
+	PVOID RegistrationContext;
+	UNICODE_STRING Altitude;
+	PVOID CallbackContext;
+} UMHH_OB_REGISTRATION, *PUMHH_OB_REGISTRATION;
+
+// CallbackList offsets per Windows version (x64).
+// These are verified constants from WinObjEx64, which uses FIELD_OFFSET
+// at compile time with MSVC default packing against the real kernel
+// OBJECT_TYPE structure definitions. We hardcode them here rather than
+// recalculating with FIELD_OFFSET because the struct packing behavior
+// is subtle and getting it wrong causes BSOD.
+//
+// WinObjEx64 verified values:
+//   V1 (Win7, 7600-7601):           0xB4
+//   V2 (Win8-W10 RTM, 9200-10586): 0xBC
+//   V3 (Win10 RS1, 14393):          0xC0
+//   V4 (Win10 RS2+, 15063+):        0xC8
+#define OBJECT_TYPE_CALLBACK_LIST_OFFSET_V1  0xB4  // Win7
+#define OBJECT_TYPE_CALLBACK_LIST_OFFSET_V2  0xBC  // Win8-W10 RTM
+#define OBJECT_TYPE_CALLBACK_LIST_OFFSET_V3  0xC0  // Win10 RS1
+#define OBJECT_TYPE_CALLBACK_LIST_OFFSET_V4  0xC8  // Win10 RS2+ / Win11
+
+// Maximum number of Ob callback entries we track for patch/restore
+#define MAX_OB_CALLBACK_PATCHES 64
+
+// Maximum iterations for callback list traversal (guard against corrupted lists)
+#define MAX_CALLBACK_LIST_ITERATIONS 128
+
+typedef struct _OB_CALLBACK_PATCH_ENTRY {
+	PVOID FunctionAddress;  // kernel address of Pre/Post operation function
+	UCHAR OriginalBytes[3]; // saved first 3 bytes
+	BOOLEAN IsPatched;      // TRUE if currently patched
+} OB_CALLBACK_PATCH_ENTRY, *POB_CALLBACK_PATCH_ENTRY;
+
+static OB_CALLBACK_PATCH_ENTRY g_ObCallbackPatches[MAX_OB_CALLBACK_PATCHES] = { 0 };
+static ULONG g_ObCallbackPatchCount = 0;
+static BOOLEAN g_ObCallbacksPatched = FALSE;
+
+// xor eax,eax; ret => returns STATUS_SUCCESS (0)
+static const UCHAR g_XorEaxEaxRet[3] = { 0x31, 0xC0, 0xC3 };
+
+// Determine CallbackList offset based on OS build number.
+// Uses WinObjEx64-verified hardcoded constants.
+static ULONG GetCallbackListOffset(VOID) {
+	DRIVERCTX_OSVER ver = DriverCtx_GetOsVersion();
+	if (ver.Build < 9200) {
+		return OBJECT_TYPE_CALLBACK_LIST_OFFSET_V1;  // Win7
+	} else if (ver.Build < 14393) {
+		return OBJECT_TYPE_CALLBACK_LIST_OFFSET_V2;  // Win8-W10 RTM
+	} else if (ver.Build < 15063) {
+		return OBJECT_TYPE_CALLBACK_LIST_OFFSET_V3;  // Win10 RS1
+	} else {
+		return OBJECT_TYPE_CALLBACK_LIST_OFFSET_V4;  // Win10 RS2+ / Win11
+	}
+}
+
+static NTSTATUS Handle_DisableObProcessCallbacks(
+	PUMHH_COMMAND_MESSAGE msg,
+	ULONG InputBufferSize,
+	PVOID OutputBuffer,
+	ULONG OutputBufferSize,
+	PULONG ReturnOutputBufferLength
+) {
+	UNREFERENCED_PARAMETER(msg);
+	UNREFERENCED_PARAMETER(InputBufferSize);
+	NTSTATUS status = STATUS_SUCCESS;
+
+	if (g_ObCallbacksPatched) {
+		if (OutputBuffer && OutputBufferSize >= sizeof(NTSTATUS))
+			RtlCopyMemory(OutputBuffer, &status, sizeof(NTSTATUS));
+		if (ReturnOutputBufferLength) *ReturnOutputBufferLength = sizeof(NTSTATUS);
+		return STATUS_SUCCESS;
+	}
+
+	ULONG callbackListOffset = GetCallbackListOffset();
+
+	// PsProcessType points to _OBJECT_TYPE. Walk its CallbackList.
+	PLIST_ENTRY listHead = (PLIST_ENTRY)((PUCHAR)*PsProcessType + callbackListOffset);
+
+	if (!listHead || IsListEmpty(listHead)) {
+		Log(L"ObProcessCallback: CallbackList is empty or NULL\n");
+		status = STATUS_NOT_FOUND;
+		if (OutputBuffer && OutputBufferSize >= sizeof(NTSTATUS))
+			RtlCopyMemory(OutputBuffer, &status, sizeof(NTSTATUS));
+		if (ReturnOutputBufferLength) *ReturnOutputBufferLength = sizeof(NTSTATUS);
+		return status;
+	}
+
+	g_ObCallbackPatchCount = 0;
+
+	PLIST_ENTRY entry = listHead->Flink;
+	ULONG guardIter = 0;
+
+	while (entry != listHead && guardIter < MAX_CALLBACK_LIST_ITERATIONS && g_ObCallbackPatchCount < MAX_OB_CALLBACK_PATCHES) {
+		guardIter++;
+
+		// Read the full OB_CALLBACK_CONTEXT_BLOCK at this list entry.
+		// entry points to CallbackListEntry which is at offset 0x00 of the block,
+		// so entry itself is the base of the structure.
+		UMHH_OB_CALLBACK_CONTEXT_BLOCK callbackBlock;
+		RtlZeroMemory(&callbackBlock, sizeof(callbackBlock));
+
+		if (!Mini_ReadKernelMemory(entry, &callbackBlock, sizeof(callbackBlock))) {
+			Log(L"ObProcessCallback: failed to read callback block at entry=0x%p\n", entry);
+			break;
+		}
+
+		// Validate Flink before using it for next iteration
+		if (!callbackBlock.CallbackListEntry.Flink) {
+			Log(L"ObProcessCallback: NULL Flink at entry=0x%p\n", entry);
+			break;
+		}
+
+		// Extract PreCallback and PostCallback using the correct structure offsets
+		PVOID preOpAddr = callbackBlock.PreCallback;
+		PVOID postOpAddr = callbackBlock.PostCallback;
+
+		// Patch PreOperation if non-NULL and not already our own stub
+		if (preOpAddr && preOpAddr != (PVOID)g_XorEaxEaxRet && g_ObCallbackPatchCount < MAX_OB_CALLBACK_PATCHES) {
+			POB_CALLBACK_PATCH_ENTRY patch = &g_ObCallbackPatches[g_ObCallbackPatchCount];
+
+			if (!Mini_ReadKernelMemory(preOpAddr, patch->OriginalBytes, 3)) {
+				Log(L"ObProcessCallback: failed to read original bytes at PreOp=0x%p\n", preOpAddr);
+			} else {
+				patch->FunctionAddress = preOpAddr;
+				patch->IsPatched = FALSE;
+
+				if (!Mini_WriteKernelMemory(preOpAddr, g_XorEaxEaxRet, 3)) {
+					Log(L"ObProcessCallback: failed to patch PreOp at 0x%p\n", preOpAddr);
+				} else {
+					patch->IsPatched = TRUE;
+					g_ObCallbackPatchCount++;
+					Log(L"ObProcessCallback: patched PreOp at 0x%p\n", preOpAddr);
+				}
+			}
+		}
+
+		// Patch PostOperation if non-NULL and different from PreOperation
+		if (postOpAddr && postOpAddr != preOpAddr && postOpAddr != (PVOID)g_XorEaxEaxRet
+			&& g_ObCallbackPatchCount < MAX_OB_CALLBACK_PATCHES) {
+			POB_CALLBACK_PATCH_ENTRY postPatch = &g_ObCallbackPatches[g_ObCallbackPatchCount];
+
+			if (!Mini_ReadKernelMemory(postOpAddr, postPatch->OriginalBytes, 3)) {
+				Log(L"ObProcessCallback: failed to read original bytes at PostOp=0x%p\n", postOpAddr);
+			} else {
+				postPatch->FunctionAddress = postOpAddr;
+				postPatch->IsPatched = FALSE;
+
+				if (!Mini_WriteKernelMemory(postOpAddr, g_XorEaxEaxRet, 3)) {
+					Log(L"ObProcessCallback: failed to patch PostOp at 0x%p\n", postOpAddr);
+				} else {
+					postPatch->IsPatched = TRUE;
+					g_ObCallbackPatchCount++;
+					Log(L"ObProcessCallback: patched PostOp at 0x%p\n", postOpAddr);
+				}
+			}
+		}
+
+		entry = callbackBlock.CallbackListEntry.Flink;
+	}
+
+	if (guardIter >= MAX_CALLBACK_LIST_ITERATIONS) {
+		Log(L"ObProcessCallback: WARNING - hit iteration guard, list may be corrupted\n");
+	}
+
+	g_ObCallbacksPatched = TRUE;
+	Log(L"ObProcessCallback: disabled %u callback entries\n", g_ObCallbackPatchCount);
+
+	if (OutputBuffer && OutputBufferSize >= sizeof(NTSTATUS))
+		RtlCopyMemory(OutputBuffer, &status, sizeof(NTSTATUS));
+	if (ReturnOutputBufferLength) *ReturnOutputBufferLength = sizeof(NTSTATUS);
+	return status;
+}
+
+static NTSTATUS Handle_RestoreObProcessCallbacks(
+	PUMHH_COMMAND_MESSAGE msg,
+	ULONG InputBufferSize,
+	PVOID OutputBuffer,
+	ULONG OutputBufferSize,
+	PULONG ReturnOutputBufferLength
+) {
+	UNREFERENCED_PARAMETER(msg);
+	UNREFERENCED_PARAMETER(InputBufferSize);
+	NTSTATUS status = STATUS_SUCCESS;
+
+	if (!g_ObCallbacksPatched) {
+		// Not patched, nothing to restore
+		if (OutputBuffer && OutputBufferSize >= sizeof(NTSTATUS))
+			RtlCopyMemory(OutputBuffer, &status, sizeof(NTSTATUS));
+		if (ReturnOutputBufferLength) *ReturnOutputBufferLength = sizeof(NTSTATUS);
+		return STATUS_SUCCESS;
+	}
+
+	// Restore all patched entries
+	for (ULONG i = 0; i < g_ObCallbackPatchCount; i++) {
+		POB_CALLBACK_PATCH_ENTRY patch = &g_ObCallbackPatches[i];
+		if (patch->IsPatched && patch->FunctionAddress) {
+			if (!Mini_WriteKernelMemory(patch->FunctionAddress, patch->OriginalBytes, 3)) {
+				Log(L"ObProcessCallback: failed to restore at 0x%p\n", patch->FunctionAddress);
+				status = STATUS_UNSUCCESSFUL;
+			} else {
+				Log(L"ObProcessCallback: restored at 0x%p\n", patch->FunctionAddress);
+			}
+		}
+		patch->FunctionAddress = NULL;
+		patch->IsPatched = FALSE;
+	}
+
+	g_ObCallbackPatchCount = 0;
+	g_ObCallbacksPatched = FALSE;
+	Log(L"ObProcessCallback: all callbacks restored\n");
+
+	if (OutputBuffer && OutputBufferSize >= sizeof(NTSTATUS))
+		RtlCopyMemory(OutputBuffer, &status, sizeof(NTSTATUS));
+	if (ReturnOutputBufferLength) *ReturnOutputBufferLength = sizeof(NTSTATUS);
+	return status;
+}
+
+VOID Comm_RestoreObProcessCallbacksOnUnload(void) {
+	if (!g_ObCallbacksPatched) return;
+	for (ULONG i = 0; i < g_ObCallbackPatchCount; i++) {
+		POB_CALLBACK_PATCH_ENTRY patch = &g_ObCallbackPatches[i];
+		if (patch->IsPatched && patch->FunctionAddress) {
+			Mini_WriteKernelMemory(patch->FunctionAddress, patch->OriginalBytes, 3);
+			Log(L"ObProcessCallback: unload-restore at 0x%p\n", patch->FunctionAddress);
+		}
+		patch->FunctionAddress = NULL;
+		patch->IsPatched = FALSE;
+	}
+	g_ObCallbackPatchCount = 0;
+	g_ObCallbacksPatched = FALSE;
+	Log(L"ObProcessCallback: all callbacks restored on unload\n");
+}
 
 BOOLEAN KmhhMapKernelRegionToUser(KMHH_MAP_CONTEXT* ctx,
 	PVOID kernelVa,

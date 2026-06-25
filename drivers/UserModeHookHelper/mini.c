@@ -16,6 +16,9 @@ MiniUnload(
 {
 	UNREFERENCED_PARAMETER(Flags);
 
+	// Restore any patched ObProcessCallbacks before unloading
+	Comm_RestoreObProcessCallbacksOnUnload();
+
 	// free port context related resources (encapsulated in PortCtx module)
 	// Uninitialize injection module before tearing down port contexts
 	Inject_Uninit();

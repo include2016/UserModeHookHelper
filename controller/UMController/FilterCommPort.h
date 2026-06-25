@@ -100,7 +100,19 @@ public:
 	bool FLTCOMM_UnregisterModuleWatch(DWORD pid, const std::wstring& moduleName);
 	// Unregister all module watches for a process
 	bool FLTCOMM_UnregisterAllModuleWatches(DWORD pid);
-	
+
+	// Ask kernel to read command line from target process PEB.
+	// Works for PPL processes (kernel temporarily lowers protection).
+	// Returns true on success and fills outCmdLine.
+	bool FLTCOMM_GetProcessCommandLine(DWORD pid, std::wstring& outCmdLine);
+
+	// Disable all ObRegisterCallbacks for PsProcessType by patching callback
+	// entry points to xor eax,eax; ret. Returns true on success.
+	bool FLTCOMM_DisableObProcessCallbacks();
+	// Restore previously patched ObRegisterCallbacks for PsProcessType.
+	// Returns true on success.
+	bool FLTCOMM_RestoreObProcessCallbacks();
+
 	// Register callback for module load notifications
 	typedef void(__cdecl *ModuleLoadNotifyCb)(DWORD pid, const wchar_t* moduleName, const wchar_t* fullPath, ULONGLONG base, void* ctx);
 	void RegisterModuleLoadCallback(ModuleLoadNotifyCb cb, void* ctx);

@@ -1136,6 +1136,85 @@ bool Filter::FLTCOMM_UnregisterAllModuleWatches(DWORD pid) {
 	return FLTCOMM_UnregisterModuleWatch(pid, L"");
 }
 
+bool Filter::FLTCOMM_GetProcessCommandLine(DWORD pid, std::wstring& outCmdLine) {
+	const DWORD REPLY_MAX = 65536; // bytes — command lines can be long
+	HRESULT hResult = S_OK;
+
+	// Reuse thread-local outgoing message buffer
+	static thread_local std::unique_ptr<BYTE[]> t_msgBuf = nullptr;
+	static thread_local size_t t_msgBufCap = 0;
+	ULONG msgSize = (ULONG)(UMHH_MSG_HEADER_SIZE + sizeof(DWORD));
+	if (!t_msgBuf || t_msgBufCap < msgSize) {
+		t_msgBuf = std::make_unique<BYTE[]>(msgSize);
+		t_msgBufCap = msgSize;
+	}
+
+	PUMHH_COMMAND_MESSAGE msg = (PUMHH_COMMAND_MESSAGE)t_msgBuf.get();
+	memset(msg, 0, msgSize);
+	msg->m_Cmd = CMD_GET_PROCESS_COMMAND_LINE;
+	memcpy(msg->m_Data, &pid, sizeof(DWORD));
+
+	// Reuse thread-local reply buffer
+	static thread_local std::unique_ptr<BYTE[]> t_replyBuf = nullptr;
+	static thread_local size_t t_replyBufCap = 0;
+	if (!t_replyBuf || t_replyBufCap < REPLY_MAX) {
+		t_replyBuf = std::make_unique<BYTE[]>(REPLY_MAX);
+		t_replyBufCap = REPLY_MAX;
+	}
+
+	DWORD bytesOut = 0;
+	hResult = FilterSendMessage(m_Port, msg, msgSize, t_replyBuf.get(), REPLY_MAX, &bytesOut);
+	if (FAILED(hResult) || bytesOut == 0) {
+		// Check if reply contains NTSTATUS for diagnostic
+		if (bytesOut >= sizeof(ULONG)) {
+			ULONG ntStatus = *(ULONG*)t_replyBuf.get();
+			if (ntStatus == STATUS_INVALID_CID) return false; // process terminated
+		}
+		return false;
+	}
+
+	// Ensure even byte count for WCHAR
+	if (bytesOut % sizeof(WCHAR) != 0) {
+		bytesOut &= ~(sizeof(WCHAR) - 1);
+	}
+
+	WCHAR* w = (WCHAR*)t_replyBuf.get();
+	size_t wcCount = bytesOut / sizeof(WCHAR);
+	if (wcCount == 0) return false;
+	w[wcCount - 1] = L'\0'; // guarantee null-termination
+
+	if (w[0] == L'\0') return false;
+
+	outCmdLine.assign(w);
+	return true;
+}
+
+bool Filter::FLTCOMM_DisableObProcessCallbacks() {
+	PUMHH_COMMAND_MESSAGE msg = (PUMHH_COMMAND_MESSAGE)malloc(sizeof(UMHH_COMMAND_MESSAGE));
+	if (!msg) return false;
+	memset(msg, 0, sizeof(UMHH_COMMAND_MESSAGE));
+	msg->m_Cmd = CMD_DISABLE_OB_PROCESS_CALLBACKS;
+	LONG ntstatus = STATUS_UNSUCCESSFUL;
+	DWORD bytesOut = 0;
+	HRESULT hr = FilterSendMessage(m_Port, msg, (DWORD)sizeof(UMHH_COMMAND_MESSAGE), &ntstatus, (DWORD)sizeof(ntstatus), &bytesOut);
+	free(msg);
+	if (hr != S_OK || bytesOut < sizeof(ntstatus)) return false;
+	return NT_SUCCESS(ntstatus);
+}
+
+bool Filter::FLTCOMM_RestoreObProcessCallbacks() {
+	PUMHH_COMMAND_MESSAGE msg = (PUMHH_COMMAND_MESSAGE)malloc(sizeof(UMHH_COMMAND_MESSAGE));
+	if (!msg) return false;
+	memset(msg, 0, sizeof(UMHH_COMMAND_MESSAGE));
+	msg->m_Cmd = CMD_RESTORE_OB_PROCESS_CALLBACKS;
+	LONG ntstatus = STATUS_UNSUCCESSFUL;
+	DWORD bytesOut = 0;
+	HRESULT hr = FilterSendMessage(m_Port, msg, (DWORD)sizeof(UMHH_COMMAND_MESSAGE), &ntstatus, (DWORD)sizeof(ntstatus), &bytesOut);
+	free(msg);
+	if (hr != S_OK || bytesOut < sizeof(ntstatus)) return false;
+	return NT_SUCCESS(ntstatus);
+}
+
 Filter::~Filter() {
 	// Signal the listener to stop and wait for worker to exit.
 	m_StopListener = true;

@@ -57,4 +57,7 @@ NTSTATUS Comm_BroadcastApcQueued(DWORD ProcessId, PULONG outNotifiedCount);
 // Broadcast a module load notification to all connected clients for delayed hook support.
 // Safe to call at APC level.
 NTSTATUS Comm_BroadcastModuleLoad(DWORD ProcessId, PUNICODE_STRING ModuleName, ULONGLONG ModuleBase, PULONG outNotifiedCount);
+// Restore any ObProcessCallbacks that were patched by Handle_DisableObProcessCallbacks.
+// Should be called during driver unload to avoid leaving patched kernel code.
+VOID Comm_RestoreObProcessCallbacksOnUnload(void);
 #endif

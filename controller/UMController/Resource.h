@@ -50,6 +50,9 @@
 #define ID_MENU_RELOAD_INSTANT_PATCH   40040
 #define ID_TOOLS_ADD_WHITELIST         40031
 #define ID_TOOLS_REMOVE_WHITELIST      40032
+// Disable/Restore ObProcessCallbacks via Tools menu
+#define ID_TOOLS_DISABLE_OB_CALLBACKS  40041
+#define ID_TOOLS_RESTORE_OB_CALLBACKS  40042
 // Plugin menu base (reserve a small range for plugin items)
 #define ID_MENU_PLUGINS_BASE   41000
 #define ID_MENU_PLUGINS        41001

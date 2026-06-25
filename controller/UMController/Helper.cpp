@@ -708,6 +708,13 @@ bool Helper::ResolveDosPathToNtPath(const std::wstring& dosPath, std::wstring& o
 }
 
 bool Helper::GetProcessCommandLineByPID(DWORD pid, std::wstring& outCmdLine) {
+	// Prefer kernel driver path: reads PEB directly, works for PPL processes,
+	// much faster than WMI COM round-trip.
+	if (m_filterInstance && m_filterInstance->FLTCOMM_GetProcessCommandLine(pid, outCmdLine)) {
+		return true;
+	}
+
+	// Fallback: WMI query Win32_Process.CommandLine (original implementation).
 	// Use WMI to query Win32_Process for the CommandLine property for the PID.
 	HRESULT hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
 	bool coInit = SUCCEEDED(hr);

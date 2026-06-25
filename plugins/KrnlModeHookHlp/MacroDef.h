@@ -24,6 +24,14 @@
 #define PLACE_HOLDER_DRIVER_NAME "rt640x64.sys"
 #define TRAMPOLINE_DRV_NAME "kmhh_trampoline_sys.sys"
 #define TO_DESK_DRIVER_NAME  "ToDeskAudio.sys"
+#define DRIVER_LOADER_EXE   "DriverLoader.exe"
+
+// Signed-driver trampoline layout (ToDeskAudio.sys .text section)
+#define SIGNED_TRAMP_TEXT_OFFSET    0x1000  // .text section start (base+0x1000)
+#define SIGNED_TRAMP_STAGE1_GROUP0  0x000   // stage_1_num_000 offset from text start
+#define SIGNED_TRAMP_STAGE2_GROUP0  0x3160  // stage_2_num_000 offset from text start
+#define SIGNED_TRAMP_GROUP_STRIDE   0x4F0   // stride between groups
+#define SIGNED_TRAMP_MAX_GROUPS     10       // maximum 10 groups
 #define EXP_DRIVER_NAME "e496fa000ab3f17eeb0e77851475dbc24688e41349257e47d3bab6cde806dd8c_hydrawddm.sys"
 
 #define NTKRNL_NAME "ntoskrnl.exe"

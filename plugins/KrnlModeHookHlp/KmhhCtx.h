@@ -12,3 +12,7 @@ PVOID KmhhCtx_GetTrampolinehDrvBase();
 
 VOID KmhhCtx_SetDbgPromptAbsAddr(PVOID addr);
 PVOID KmhhCtx_GetDbgPromptAbsAddr();
+
+// Signed-driver trampoline mode flag
+VOID KmhhCtx_SetSignedTrampolineMode(BOOL enabled);
+BOOL KmhhCtx_IsSignedTrampolineMode();

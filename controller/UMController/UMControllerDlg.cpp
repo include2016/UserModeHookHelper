@@ -362,6 +362,8 @@ BEGIN_MESSAGE_MAP(CUMControllerDlg, CDialogEx)
 	ON_COMMAND(ID_MENU_PLUGIN_UNLOAD_ALL, &CUMControllerDlg::OnPluginUnloadAll)
 	ON_COMMAND(ID_TOOLS_ADD_WHITELIST, &CUMControllerDlg::OnAddWhitelist)
 	ON_COMMAND(ID_TOOLS_REMOVE_WHITELIST, &CUMControllerDlg::OnRemoveWhitelist)
+	ON_COMMAND(ID_TOOLS_DISABLE_OB_CALLBACKS, &CUMControllerDlg::OnDisableObProcessCallbacks)
+	ON_COMMAND(ID_TOOLS_RESTORE_OB_CALLBACKS, &CUMControllerDlg::OnRestoreObProcessCallbacks)
 	ON_COMMAND(ID_MENU_ELEVATE_TO_PPL, &CUMControllerDlg::OnElevateToPpl)
 	ON_COMMAND(ID_MENU_UNPROTECT_PPL, &CUMControllerDlg::OnUnprotectPpl)
 	ON_COMMAND(ID_MENU_WAKE_UP, &CUMControllerDlg::OnWakeUp)
@@ -1218,6 +1220,36 @@ BOOL CUMControllerDlg::OnInitDialog()
 			DrawMenuBar();
 		}
 		return 0;
+	}
+
+	void CUMControllerDlg::OnDisableObProcessCallbacks() {
+		if (m_obCallbacksDisabled) {
+			MessageBoxW(L"ObProcessCallbacks are already disabled.", L"Info", MB_OK | MB_ICONINFORMATION);
+			return;
+		}
+		if (!m_Filter.FLTCOMM_DisableObProcessCallbacks()) {
+			LOG_CTRL_ETW_E(L"FLTCOMM_DisableObProcessCallbacks failed\n");
+			MessageBoxW(L"Failed to disable ObProcessCallbacks. Is the driver loaded?", L"Error", MB_OK | MB_ICONERROR);
+			return;
+		}
+		m_obCallbacksDisabled = true;
+		LOG_CTRL_ETW(L"ObProcessCallbacks disabled successfully\n");
+		MessageBoxW(L"All ObProcessCallbacks have been disabled (patched to xor eax,eax; ret).", L"Success", MB_OK | MB_ICONINFORMATION);
+	}
+
+	void CUMControllerDlg::OnRestoreObProcessCallbacks() {
+		if (!m_obCallbacksDisabled) {
+			MessageBoxW(L"ObProcessCallbacks are not currently disabled.", L"Info", MB_OK | MB_ICONINFORMATION);
+			return;
+		}
+		if (!m_Filter.FLTCOMM_RestoreObProcessCallbacks()) {
+			LOG_CTRL_ETW_E(L"FLTCOMM_RestoreObProcessCallbacks failed\n");
+			MessageBoxW(L"Failed to restore ObProcessCallbacks. Is the driver loaded?", L"Error", MB_OK | MB_ICONERROR);
+			return;
+		}
+		m_obCallbacksDisabled = false;
+		LOG_CTRL_ETW(L"ObProcessCallbacks restored successfully\n");
+		MessageBoxW(L"All ObProcessCallbacks have been restored to their original code.", L"Success", MB_OK | MB_ICONINFORMATION);
 	}
 
 

@@ -723,6 +723,11 @@ bool ApplyHookEntry(HookSequenceContext& ctx, const HookSequenceEntry& entry, Ho
 		KMHHLog(L"No hook IDs available\n");
 		return false;
 	}
+	if (KmhhCtx_IsSignedTrampolineMode() && hookId >= SIGNED_TRAMP_MAX_GROUPS) {
+		ReleaseHookId(ctx, hookId);
+		KMHHLog(L"[SignedTramp] hook ID %d exceeds max groups (%d)\n", hookId, SIGNED_TRAMP_MAX_GROUPS);
+		return false;
+	}
 	DWORD oriLen = 0;
 	PVOID trampolinePit = nullptr;
 	PVOID oriAsmAddr = nullptr;
@@ -731,24 +736,35 @@ bool ApplyHookEntry(HookSequenceContext& ctx, const HookSequenceEntry& entry, Ho
 	DWORD stage_2_func_offset = 0;
 	DWORD ori_asm_code_len = 0;
 	DWORD64 trampoline_pit = 0;
-	// get stage 1 and stage 2 export function address
+	// get stage 1 and stage 2 offsets (mode-dependent)
 	{
-		std::wstring trampoline_sys_path = Helper::GetCurrentDirFilePath((TCHAR*)WIDEN(TRAMPOLINE_DRV_NAME));
-		char stage_1_func_name[64] = { 0 };
-		sprintf_s(stage_1_func_name, "trampoline_stage_1_num_%03d", hookId);
-		if (!ctx.services->CheckExportFromFile(trampoline_sys_path.c_str(), stage_1_func_name, &stage_1_func_offset)) {
-			KMHHLog(L"STAGE_1 required export function not found in trampoline driver, Path=%s\n", trampoline_sys_path.c_str());
-			return false;
+		if (KmhhCtx_IsSignedTrampolineMode()) {
+			// Signed-driver mode: fixed layout in .text section
+			// stage_1: SIGNED_TRAMP_TEXT_OFFSET + SIGNED_TRAMP_STAGE1_GROUP0 + hookId * SIGNED_TRAMP_GROUP_STRIDE
+			// stage_2: SIGNED_TRAMP_TEXT_OFFSET + SIGNED_TRAMP_STAGE2_GROUP0 + hookId * SIGNED_TRAMP_GROUP_STRIDE
+			stage_1_func_offset = SIGNED_TRAMP_TEXT_OFFSET + SIGNED_TRAMP_STAGE1_GROUP0 + (DWORD)hookId * SIGNED_TRAMP_GROUP_STRIDE;
+			stage_2_func_offset = SIGNED_TRAMP_TEXT_OFFSET + SIGNED_TRAMP_STAGE2_GROUP0 + (DWORD)hookId * SIGNED_TRAMP_GROUP_STRIDE;
+			oriAsmAddr = (PVOID)((DWORD64)KmhhCtx_GetTrampolinehDrvBase() + stage_2_func_offset + OFFSET_FOR_ORIGINAL_ASM_CODE_SAVE);
 		}
+		else {
+			// Legacy mode: resolve via PE export table
+			std::wstring trampoline_sys_path = Helper::GetCurrentDirFilePath((TCHAR*)WIDEN(TRAMPOLINE_DRV_NAME));
+			char stage_1_func_name[64] = { 0 };
+			sprintf_s(stage_1_func_name, "trampoline_stage_1_num_%03d", hookId);
+			if (!ctx.services->CheckExportFromFile(trampoline_sys_path.c_str(), stage_1_func_name, &stage_1_func_offset)) {
+				KMHHLog(L"STAGE_1 required export function not found in trampoline driver, Path=%s\n", trampoline_sys_path.c_str());
+				return false;
+			}
 
-		char stage_2_func_name[64] = { 0 };
-		sprintf_s(stage_2_func_name, "trampoline_stage_2_num_%03d", hookId);
-		if (!ctx.services->CheckExportFromFile(trampoline_sys_path.c_str(), stage_2_func_name, &stage_2_func_offset)) {
-			KMHHLog(L"STAGE_2 required export function not found in trampoline driver, Path=%s\n", trampoline_sys_path.c_str());
-			return false;
+			char stage_2_func_name[64] = { 0 };
+			sprintf_s(stage_2_func_name, "trampoline_stage_2_num_%03d", hookId);
+			if (!ctx.services->CheckExportFromFile(trampoline_sys_path.c_str(), stage_2_func_name, &stage_2_func_offset)) {
+				KMHHLog(L"STAGE_2 required export function not found in trampoline driver, Path=%s\n", trampoline_sys_path.c_str());
+				return false;
+			}
+
+			oriAsmAddr = (PVOID)((DWORD64)KmhhCtx_GetTrampolinehDrvBase() + stage_2_func_offset + OFFSET_FOR_ORIGINAL_ASM_CODE_SAVE);
 		}
-
-		oriAsmAddr = (PVOID)((DWORD64)KmhhCtx_GetTrampolinehDrvBase() + stage_2_func_offset + OFFSET_FOR_ORIGINAL_ASM_CODE_SAVE);
 	}
 	// apply hook
 	{
@@ -1140,21 +1156,51 @@ INT_PTR CALLBACK KmhhDialogProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lPara
 extern "C" __declspec(dllexport) void PluginMain(HWND parentHwnd, IHookServices* services) {
 	KmhhCtx_SetHookServices(services);
 
-	// check if trampoline sys is loaded
-	if (!KmhhCtx_GetTrampolinehDrvBase()) {
-		KMHHLog(L"trampoline driver not loaded yet, loading now...\n");
-		if (!Helper::InstallAndStartDriverService(WIDEN(TRAMPOLINE_DRV_NAME), Helper::GetCurrentDirFilePath((TCHAR*)WIDEN(TRAMPOLINE_DRV_NAME)))) {
-			KMHHLog(L"failed to call InstallAndStartDriverService\n");
+	// Check if DriverLoader.exe exists in main EXE directory — enables signed-driver trampoline mode
+	std::wstring driverLoaderPath = Helper::GetCurrentDirFilePath((TCHAR*)WIDEN(DRIVER_LOADER_EXE));
+	BOOL useSignedTrampoline = (GetFileAttributesW(driverLoaderPath.c_str()) != INVALID_FILE_ATTRIBUTES);
+	KmhhCtx_SetSignedTrampolineMode(useSignedTrampoline);
+
+	// Build plugin DLL directory path for locating co-located files (e.g. ToDeskAudio.sys)
+	wchar_t pluginDir[MAX_PATH] = {};
+	GetModuleFileNameW(g_hInstance, pluginDir, _countof(pluginDir));
+	wchar_t* lastSlash = wcsrchr(pluginDir, L'\\');
+	if (lastSlash) *(lastSlash + 1) = L'\0';
+
+	if (useSignedTrampoline) {
+		// Signed-driver mode: load ToDeskAudio.sys as trampoline carrier
+		// ToDeskAudio.sys resides in the plugin directory (same dir as this DLL)
+		std::wstring todeskPath = std::wstring(pluginDir) + WIDEN(TO_DESK_DRIVER_NAME);
+		if (!KmhhCtx_GetTrampolinehDrvBase()) {
+			KMHHLog(L"[SignedTramp] loading signed trampoline driver...\n");
+			if (!Helper::InstallAndStartDriverService(WIDEN(TO_DESK_DRIVER_NAME), todeskPath)) {
+				KMHHLog(L"[SignedTramp] failed to load signed trampoline driver\n");
+				return;
+			}
+		}
+		PVOID trampoline_drv_base = NULL;
+		if (0 != KRNL::GetDriverBase(TO_DESK_DRIVER_NAME, &trampoline_drv_base)) {
+			KMHHLog(L"[SignedTramp] failed to get signed driver base\n");
 			return;
 		}
+		KmhhCtx_SetTrampolinehDrvBase(trampoline_drv_base);
 	}
-	PVOID trampoline_drv_base = NULL;
-	if (0 != KRNL::GetDriverBase(TRAMPOLINE_DRV_NAME, &trampoline_drv_base)) {
-		KMHHLog(L"failed to call GetDriverBase\n");
-		return;
+	else {
+		// Legacy mode: load kmhh_trampoline_sys.sys via export-based offsets
+		if (!KmhhCtx_GetTrampolinehDrvBase()) {
+			KMHHLog(L"trampoline driver not loaded yet, loading now...\n");
+			if (!Helper::InstallAndStartDriverService(WIDEN(TRAMPOLINE_DRV_NAME), Helper::GetCurrentDirFilePath((TCHAR*)WIDEN(TRAMPOLINE_DRV_NAME)))) {
+				KMHHLog(L"failed to call InstallAndStartDriverService\n");
+				return;
+			}
+		}
+		PVOID trampoline_drv_base = NULL;
+		if (0 != KRNL::GetDriverBase(TRAMPOLINE_DRV_NAME, &trampoline_drv_base)) {
+			KMHHLog(L"failed to call GetDriverBase\n");
+			return;
+		}
+		KmhhCtx_SetTrampolinehDrvBase(trampoline_drv_base);
 	}
-
-	KmhhCtx_SetTrampolinehDrvBase(trampoline_drv_base);
 
 	// set nt!DbgPrompt functin address
 	PVOID krnl_base = NULL;

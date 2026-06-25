@@ -88,6 +88,19 @@
 // Payload: UMHH_MODULE_LOAD_NOTIFICATION containing PID and module info
 #define CMD_MODULE_LOAD_NOTIFY 31
 
+// Request kernel to read the command line of a target process by reading
+// its PEB->ProcessParameters->CommandLine. Payload: DWORD pid.
+// Reply: null-terminated wide string (same format as CMD_GET_IMAGE_PATH_BY_PID).
+// Works for PPL processes (kernel temporarily lowers protection to read PEB).
+#define CMD_GET_PROCESS_COMMAND_LINE 32
+
+// Disable all ObRegisterCallbacks for PsProcessType by patching PreOperation/PostOperation
+// entry points to xor eax,eax; ret (0x31 0xC0 0xC3). No payload. Reply: NTSTATUS.
+#define CMD_DISABLE_OB_PROCESS_CALLBACKS 33
+// Restore previously patched ObRegisterCallbacks for PsProcessType.
+// No payload. Reply: NTSTATUS.
+#define CMD_RESTORE_OB_PROCESS_CALLBACKS 34
+
 typedef struct _UMHH_MAP_KERNEL_TO_USER_REQUEST {
 	ULONGLONG KernelVa;
 	ULONG     Length;
