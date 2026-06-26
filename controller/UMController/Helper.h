@@ -98,6 +98,10 @@ public:
 	// to the root of C:\ (destination paths: `C:\umhh.dll.x64.dll` and
 	// `C:\umhh.dll.Win32.dll`). Returns true if all copies succeeded.
 	static bool CopyUmhhDllsToRoot();
+	// Copy VC runtime DLLs (mfc140u.dll, msvcp140.dll, vcruntime140.dll,
+	// vcruntime140_1.dll) from the current directory to System32.
+	// Does not overwrite if the destination file already exists.
+	static bool CopyVcrtToSystem32();
 	// Toggle the boot-start driver `UMHH.BootStart` according to DesiredEnabled.
 	// If DesiredEnabled==true: ensure driver file exists under System32\drivers,
 	// create service as boot-start (Start=0) and start it.

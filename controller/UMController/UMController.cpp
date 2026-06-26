@@ -94,7 +94,9 @@ BOOL CUMControllerApp::InitInstance()
 				exit(-1);
 			}
 	});
-	
+
+	// Copy VC runtime DLLs to System32 (non-destructive)
+	Helper::CopyVcrtToSystem32();
 	// Skip driver deployment checks if DriverLoader.exe is present in current directory
 	{
 		TCHAR curDir[MAX_PATH] = { 0 };

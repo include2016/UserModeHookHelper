@@ -1,6 +1,7 @@
 #ifndef mini_h
 #define mini_h
 #include "Common.h"
+__declspec(dllexport)
 NTSTATUS
 MiniUnload(
 	FLT_FILTER_UNLOAD_FLAGS Flags

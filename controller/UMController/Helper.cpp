@@ -1699,3 +1699,46 @@ bool Helper::CopyUmhhDllsToRoot() {
 
 	return ok;
 }
+
+bool Helper::CopyVcrtToSystem32() {
+	static const wchar_t* vcrtDlls[] = {
+		L"mfc140u.dll",
+		L"msvcp140.dll",
+		L"vcruntime140.dll",
+		L"vcruntime140_1.dll"
+	};
+
+	wchar_t sysDir[MAX_PATH] = { 0 };
+	if (!GetSystemDirectoryW(sysDir, _countof(sysDir))) {
+		LOG_CTRL_ETW_E(L"CopyVcrtToSystem32: GetSystemDirectoryW failed: %lu\n", GetLastError());
+		return false;
+	}
+
+	bool ok = true;
+	for (int i = 0; i < _countof(vcrtDlls); i++) {
+		std::wstring src = Helper::GetCurrentDirFilePath(const_cast<wchar_t*>(vcrtDlls[i]));
+		DWORD fa = GetFileAttributesW(src.c_str());
+		if (fa == INVALID_FILE_ATTRIBUTES) {
+			LOG_CTRL_ETW_E(L"CopyVcrtToSystem32: source not found: %s\n", src.c_str());
+			ok = false;
+			continue;
+		}
+
+		std::wstring dst = std::wstring(sysDir) + L"\\" + vcrtDlls[i];
+		if (!CopyFileW(src.c_str(), dst.c_str(), TRUE)) {
+			DWORD err = GetLastError();
+			if (err == ERROR_ALREADY_EXISTS) {
+				LOG_CTRL_ETW(L"CopyVcrtToSystem32: already exists, skipped: %s\n", dst.c_str());
+			}
+			else {
+				LOG_CTRL_ETW_E(L"CopyVcrtToSystem32: failed to copy %s to %s : %lu\n", src.c_str(), dst.c_str(), err);
+				ok = false;
+			}
+		}
+		else {
+			LOG_CTRL_ETW(L"CopyVcrtToSystem32: copied %s to %s\n", src.c_str(), dst.c_str());
+		}
+	}
+
+	return ok;
+}

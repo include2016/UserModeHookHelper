@@ -107,6 +107,7 @@
       <LanguageStandard>stdcpp17</LanguageStandard>
       <TreatWarningAsError>true</TreatWarningAsError>
       <ControlFlowGuard>Guard</ControlFlowGuard>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -116,13 +117,13 @@
       <EnableUAC>false</EnableUAC>
       <AdditionalDependencies>$(SolutionDir)lib\detours_x64.lib;$(SolutionDir)lib\capstone.lib;ntdll.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
-      <PostBuildEvent>
+    <PostBuildEvent>
       <Command>if not exist "$(SolutionDir)product" mkdir "$(SolutionDir)product"
 if not exist "$(SolutionDir)product\pdb" mkdir "$(SolutionDir)product\pdb"
 copy /Y "$(TargetPath)" "$(SolutionDir)product\"
 copy /Y "$(TargetDir)$(TargetName).pdb" "$(SolutionDir)product\pdb\"</Command>
     </PostBuildEvent>
-</ItemDefinitionGroup>
+  </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
@@ -183,13 +184,13 @@ copy /Y "$(TargetDir)$(TargetName).pdb" "$(SolutionDir)product\pdb\"</Command>
       <EnableUAC>false</EnableUAC>
       <AdditionalDependencies>$(SolutionDir)lib\detours_x86.lib;$(SolutionDir)lib\capstone_x86.lib;ntdll.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
-      <PostBuildEvent>
+    <PostBuildEvent>
       <Command>if not exist "$(SolutionDir)product" mkdir "$(SolutionDir)product"
 if not exist "$(SolutionDir)product\pdb" mkdir "$(SolutionDir)product\pdb"
 copy /Y "$(TargetPath)" "$(SolutionDir)product\"
 copy /Y "$(TargetDir)$(TargetName).pdb" "$(SolutionDir)product\pdb\"</Command>
     </PostBuildEvent>
-</ItemDefinitionGroup>
+  </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="internal\event_names.h" />
     <ClInclude Include="internal\fnv.h" />

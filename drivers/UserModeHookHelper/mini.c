@@ -9,6 +9,7 @@
 #include "Inject.h"
 #include <ntifs.h>
 #include "StrLib.h"
+__declspec(dllexport)
 NTSTATUS
 MiniUnload(
 	FLT_FILTER_UNLOAD_FLAGS Flags
