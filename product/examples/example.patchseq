@@ -1,0 +1,4 @@
+[patch]
+module=Microsoft.VisualStudio.ProductKeyDialog.ni.dll
+offset=0x8a455
+patch=909090909090
