@@ -364,6 +364,8 @@ BEGIN_MESSAGE_MAP(CUMControllerDlg, CDialogEx)
 	ON_COMMAND(ID_TOOLS_REMOVE_WHITELIST, &CUMControllerDlg::OnRemoveWhitelist)
 	ON_COMMAND(ID_TOOLS_DISABLE_OB_CALLBACKS, &CUMControllerDlg::OnDisableObProcessCallbacks)
 	ON_COMMAND(ID_TOOLS_RESTORE_OB_CALLBACKS, &CUMControllerDlg::OnRestoreObProcessCallbacks)
+	ON_COMMAND(ID_TOOLS_DISABLE_SECTION_CALLBACKS, &CUMControllerDlg::OnDisableSectionCallbacks)
+	ON_COMMAND(ID_TOOLS_RESTORE_SECTION_CALLBACKS, &CUMControllerDlg::OnRestoreSectionCallbacks)
 	ON_COMMAND(ID_MENU_ELEVATE_TO_PPL, &CUMControllerDlg::OnElevateToPpl)
 	ON_COMMAND(ID_MENU_UNPROTECT_PPL, &CUMControllerDlg::OnUnprotectPpl)
 	ON_COMMAND(ID_MENU_WAKE_UP, &CUMControllerDlg::OnWakeUp)
@@ -1250,6 +1252,48 @@ BOOL CUMControllerDlg::OnInitDialog()
 		m_obCallbacksDisabled = false;
 		LOG_CTRL_ETW(L"ObProcessCallbacks restored successfully\n");
 		MessageBoxW(L"All ObProcessCallbacks have been restored to their original code.", L"Success", MB_OK | MB_ICONINFORMATION);
+	}
+
+	void CUMControllerDlg::OnDisableSectionCallbacks() {
+		if (m_sectionCallbacksDisabled) {
+			MessageBoxW(L"SectionCallbacks are already disabled.", L"Info", MB_OK | MB_ICONINFORMATION);
+			return;
+		}
+		LONG ntStatus = 0;
+		if (!m_Filter.FLTCOMM_DisableSectionCallbacks(&ntStatus)) {
+			// STATUS_NOT_SUPPORTED = 0xC00000BB
+			// STATUS_DRIVER_INTERNAL_ERROR = 0xC000018A
+			if (ntStatus == (LONG)0xC00000BB) {
+				LOG_CTRL_ETW_E(L"FLTCOMM_DisableSectionCallbacks: OS build not supported (0x%08X)\n", ntStatus);
+				MessageBoxW(L"SectionCallbacks: this OS build is not supported.\nFLT_FILTER offsets are not available for your Windows version.", L"Error", MB_OK | MB_ICONERROR);
+			} else if (ntStatus == (LONG)0xC000018A) {
+				LOG_CTRL_ETW_E(L"FLTCOMM_DisableSectionCallbacks: FLT_FILTER offsets not yet filled (0x%08X)\n", ntStatus);
+				MessageBoxW(L"SectionCallbacks: kernel structure offsets are not yet configured.\nFill in the FLT_FILTER offset table in KernelOffsets.c for your build.", L"Error", MB_OK | MB_ICONERROR);
+			} else {
+				LOG_CTRL_ETW_E(L"FLTCOMM_DisableSectionCallbacks failed (0x%08X)\n", ntStatus);
+				MessageBoxW(L"Failed to disable SectionCallbacks. Is the driver loaded?", L"Error", MB_OK | MB_ICONERROR);
+			}
+			return;
+		}
+		m_sectionCallbacksDisabled = true;
+		LOG_CTRL_ETW(L"SectionCallbacks disabled successfully\n");
+		MessageBoxW(L"All section synchronization callbacks have been disabled.\nPre: mov eax,1; ret\nPost: xor eax,eax; ret", L"Success", MB_OK | MB_ICONINFORMATION);
+	}
+
+	void CUMControllerDlg::OnRestoreSectionCallbacks() {
+		if (!m_sectionCallbacksDisabled) {
+			MessageBoxW(L"SectionCallbacks are not currently disabled.", L"Info", MB_OK | MB_ICONINFORMATION);
+			return;
+		}
+		LONG ntStatus = 0;
+		if (!m_Filter.FLTCOMM_RestoreSectionCallbacks(&ntStatus)) {
+			LOG_CTRL_ETW_E(L"FLTCOMM_RestoreSectionCallbacks failed (0x%08X)\n", ntStatus);
+			MessageBoxW(L"Failed to restore SectionCallbacks. Is the driver loaded?", L"Error", MB_OK | MB_ICONERROR);
+			return;
+		}
+		m_sectionCallbacksDisabled = false;
+		LOG_CTRL_ETW(L"SectionCallbacks restored successfully\n");
+		MessageBoxW(L"All section synchronization callbacks have been restored to their original code.", L"Success", MB_OK | MB_ICONINFORMATION);
 	}
 
 

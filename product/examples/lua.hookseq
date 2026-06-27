@@ -1,5 +1,0 @@
-[hook]
-module=kernel32.dll
-offset=0x57160
-script=C:\Users\x\Desktop\project\umhh\controller\UMController\createfilewhook.lua
-handler=on_hook

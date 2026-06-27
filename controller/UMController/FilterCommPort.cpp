@@ -1215,6 +1215,34 @@ bool Filter::FLTCOMM_RestoreObProcessCallbacks() {
 	return NT_SUCCESS(ntstatus);
 }
 
+bool Filter::FLTCOMM_DisableSectionCallbacks(LONG* outNtStatus) {
+	PUMHH_COMMAND_MESSAGE msg = (PUMHH_COMMAND_MESSAGE)malloc(sizeof(UMHH_COMMAND_MESSAGE));
+	if (!msg) { if (outNtStatus) *outNtStatus = 0xC000009AL; return false; }
+	memset(msg, 0, sizeof(UMHH_COMMAND_MESSAGE));
+	msg->m_Cmd = CMD_DISABLE_SECTION_CALLBACKS;
+	LONG ntstatus = 0xC0000001L; // STATUS_UNSUCCESSFUL
+	DWORD bytesOut = 0;
+	HRESULT hr = FilterSendMessage(m_Port, msg, (DWORD)sizeof(UMHH_COMMAND_MESSAGE), &ntstatus, (DWORD)sizeof(ntstatus), &bytesOut);
+	free(msg);
+	if (hr != S_OK || bytesOut < sizeof(ntstatus)) { if (outNtStatus) *outNtStatus = 0xC0000001L; return false; }
+	if (outNtStatus) *outNtStatus = ntstatus;
+	return (ntstatus >= 0);
+}
+
+bool Filter::FLTCOMM_RestoreSectionCallbacks(LONG* outNtStatus) {
+	PUMHH_COMMAND_MESSAGE msg = (PUMHH_COMMAND_MESSAGE)malloc(sizeof(UMHH_COMMAND_MESSAGE));
+	if (!msg) { if (outNtStatus) *outNtStatus = 0xC000009AL; return false; }
+	memset(msg, 0, sizeof(UMHH_COMMAND_MESSAGE));
+	msg->m_Cmd = CMD_RESTORE_SECTION_CALLBACKS;
+	LONG ntstatus = 0xC0000001L; // STATUS_UNSUCCESSFUL
+	DWORD bytesOut = 0;
+	HRESULT hr = FilterSendMessage(m_Port, msg, (DWORD)sizeof(UMHH_COMMAND_MESSAGE), &ntstatus, (DWORD)sizeof(ntstatus), &bytesOut);
+	free(msg);
+	if (hr != S_OK || bytesOut < sizeof(ntstatus)) { if (outNtStatus) *outNtStatus = 0xC0000001L; return false; }
+	if (outNtStatus) *outNtStatus = ntstatus;
+	return (ntstatus >= 0);
+}
+
 Filter::~Filter() {
 	// Signal the listener to stop and wait for worker to exit.
 	m_StopListener = true;

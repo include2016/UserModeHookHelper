@@ -101,6 +101,15 @@
 // No payload. Reply: NTSTATUS.
 #define CMD_RESTORE_OB_PROCESS_CALLBACKS 34
 
+// Disable all minifilter IRP_MJ_ACQUIRE_FOR_SECTION_SYNCHRONIZATION pre/post callbacks.
+// Pre callbacks are patched to mov eax,1; ret (FLT_PREOP_SUCCESS_NO_CALLBACK).
+// Post callbacks are patched to xor eax,eax; ret (STATUS_SUCCESS).
+// No payload. Reply: NTSTATUS.
+#define CMD_DISABLE_SECTION_CALLBACKS 35
+// Restore previously patched minifilter section synchronization callbacks.
+// No payload. Reply: NTSTATUS.
+#define CMD_RESTORE_SECTION_CALLBACKS 36
+
 typedef struct _UMHH_MAP_KERNEL_TO_USER_REQUEST {
 	ULONGLONG KernelVa;
 	ULONG     Length;

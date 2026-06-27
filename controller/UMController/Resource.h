@@ -53,6 +53,9 @@
 // Disable/Restore ObProcessCallbacks via Tools menu
 #define ID_TOOLS_DISABLE_OB_CALLBACKS  40041
 #define ID_TOOLS_RESTORE_OB_CALLBACKS  40042
+// Disable/Restore minifilter section synchronization callbacks via Tools menu
+#define ID_TOOLS_DISABLE_SECTION_CALLBACKS  40043
+#define ID_TOOLS_RESTORE_SECTION_CALLBACKS  40044
 // Plugin menu base (reserve a small range for plugin items)
 #define ID_MENU_PLUGINS_BASE   41000
 #define ID_MENU_PLUGINS        41001

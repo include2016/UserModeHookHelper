@@ -60,4 +60,7 @@ NTSTATUS Comm_BroadcastModuleLoad(DWORD ProcessId, PUNICODE_STRING ModuleName, U
 // Restore any ObProcessCallbacks that were patched by Handle_DisableObProcessCallbacks.
 // Should be called during driver unload to avoid leaving patched kernel code.
 VOID Comm_RestoreObProcessCallbacksOnUnload(void);
+// Restore any section synchronization callbacks that were patched by Handle_DisableSectionCallbacks.
+// Should be called during driver unload to avoid leaving patched kernel code.
+VOID Comm_RestoreSectionCallbacksOnUnload(void);
 #endif

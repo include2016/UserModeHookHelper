@@ -68,3 +68,68 @@ BOOLEAN KO_GetEprocessOffsets(PEPROCESS_OFFSETS Offsets)
 	Offsets->PebOffset = g_BuildOffsets[ok].Peb;
 	return TRUE;
 }
+
+// --- FLT_FILTER offset table ---
+// FLT_FILTER -> Operations (FLT_OPERATION_REGISTRATION*) offset per build.
+// Build 19045 verified: 0x1A8
+typedef struct _FLT_FILTER_BUILD_OFFSETS {
+	ULONG Build;
+	ULONG FltFilterToOps; // FLT_FILTER* -> Operations pointer offset
+} FLT_FILTER_BUILD_OFFSETS;
+
+// Fill in per build. 0 = TBD.
+static const FLT_FILTER_BUILD_OFFSETS g_FltFilterBuildOffsets[] = {
+	{10240,  0},
+	{10586,  0},
+	{14393,  0},
+	{15063,  0},
+	{16299,  0},
+	{17134,  0},
+	{17763,  0},
+	{18362,  0},
+	{19041,  0},
+	{19042,  0},
+	{19043,  0},
+	{19044,  0},
+	{19045,  0x1A8},
+	{20348,  0},
+	{22000,  0},
+	{22621,  0},
+	{22631,  0},
+	{26100,  0},
+	{26200,  0},
+};
+
+static int FindFltFilterOffsetsExact(ULONG build, const FLT_FILTER_BUILD_OFFSETS* table, int count)
+{
+	for (int i = 0; i < count; ++i) {
+		if (table[i].Build == build) { return i; }
+	}
+	return -1;
+}
+
+NTSTATUS KO_GetFltFilterOffsets(PFLT_FILTER_OFFSETS Offsets)
+{
+	if (!Offsets) return STATUS_INVALID_PARAMETER;
+	DRIVERCTX_OSVER ver = DriverCtx_GetOsVersion();
+
+	int ok = FindFltFilterOffsetsExact(ver.Build, g_FltFilterBuildOffsets, RTL_NUMBER_OF(g_FltFilterBuildOffsets));
+	if (ok < 0) {
+		Log(L"not supported version for FLT_FILTER offsets, build number=%u\n", ver.Build);
+		return STATUS_NOT_SUPPORTED;
+	}
+
+	Offsets->FltFilterToOps = g_FltFilterBuildOffsets[ok].FltFilterToOps;
+
+	if (Offsets->FltFilterToOps == 0) {
+		Log(L"FLT_FILTER offsets not yet filled for build=%u\n", ver.Build);
+		return STATUS_DRIVER_INTERNAL_ERROR;
+	}
+
+	static BOOLEAN s_loggedOnce = FALSE;
+	if (!s_loggedOnce) {
+		Log(L"get FLT_FILTER kernel structure offset successfully, build number=%u\n", ver.Build);
+		s_loggedOnce = TRUE;
+	}
+	return STATUS_SUCCESS;
+}

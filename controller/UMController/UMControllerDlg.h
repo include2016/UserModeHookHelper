@@ -156,12 +156,17 @@ private:
 	// ObProcessCallback disable/restore under Tools menu
 	afx_msg void OnDisableObProcessCallbacks();
 	afx_msg void OnRestoreObProcessCallbacks();
+	// Section synchronization callback disable/restore under Tools menu
+	afx_msg void OnDisableSectionCallbacks();
+	afx_msg void OnRestoreSectionCallbacks();
 	// Master DLL scanner guard: ensure scanner started only once
 	bool m_MasterDllScannerStarted = false;
 	// runtime SelfDefense toggle queried from driver
 	bool m_selfDefenseEnabled = false;
 	// runtime ObProcessCallback patched state
 	bool m_obCallbacksDisabled = false;
+	// runtime section synchronization callback patched state
+	bool m_sectionCallbacksDisabled = false;
 	// Cached Early Break marks (lowercased NT paths) to avoid registry hits
 	std::unordered_set<std::wstring> m_EarlyBreakSet;
 	// Cached forced marks (PID:HIGH:LOW) compacted into 64-bit keys

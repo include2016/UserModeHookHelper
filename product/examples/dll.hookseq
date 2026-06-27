@@ -1,6 +1,0 @@
-# UserModeHookHelper hook sequence file
-[hook]
-module=ntoskrnl.exe
-offset=60b820
-dllPath=C:\Users\Public\driver\DriverHookCodeTemplate.sys
-export=HookCodeX64

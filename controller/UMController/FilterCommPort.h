@@ -113,6 +113,14 @@ public:
 	// Returns true on success.
 	bool FLTCOMM_RestoreObProcessCallbacks();
 
+	// Disable all minifilter IRP_MJ_ACQUIRE_FOR_SECTION_SYNCHRONIZATION callbacks.
+	// Pre callbacks patched to mov eax,1; ret. Post callbacks patched to xor eax,eax; ret.
+	// Returns true on success. On failure, outNtStatus receives the driver NTSTATUS for diagnostics.
+	bool FLTCOMM_DisableSectionCallbacks(LONG* outNtStatus = nullptr);
+	// Restore previously patched section synchronization callbacks.
+	// Returns true on success. On failure, outNtStatus receives the driver NTSTATUS for diagnostics.
+	bool FLTCOMM_RestoreSectionCallbacks(LONG* outNtStatus = nullptr);
+
 	// Register callback for module load notifications
 	typedef void(__cdecl *ModuleLoadNotifyCb)(DWORD pid, const wchar_t* moduleName, const wchar_t* fullPath, ULONGLONG base, void* ctx);
 	void RegisterModuleLoadCallback(ModuleLoadNotifyCb cb, void* ctx);

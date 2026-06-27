@@ -60,6 +60,8 @@ static NTSTATUS Handle_FreeMdl(PUMHH_COMMAND_MESSAGE msg, ULONG InputBufferSize,
 static NTSTATUS Handle_GetProcessCommandLine(PUMHH_COMMAND_MESSAGE msg, ULONG InputBufferSize, PVOID OutputBuffer, ULONG OutputBufferSize, PULONG ReturnOutputBufferLength);
 static NTSTATUS Handle_DisableObProcessCallbacks(PUMHH_COMMAND_MESSAGE msg, ULONG InputBufferSize, PVOID OutputBuffer, ULONG OutputBufferSize, PULONG ReturnOutputBufferLength);
 static NTSTATUS Handle_RestoreObProcessCallbacks(PUMHH_COMMAND_MESSAGE msg, ULONG InputBufferSize, PVOID OutputBuffer, ULONG OutputBufferSize, PULONG ReturnOutputBufferLength);
+static NTSTATUS Handle_DisableSectionCallbacks(PUMHH_COMMAND_MESSAGE msg, ULONG InputBufferSize, PVOID OutputBuffer, ULONG OutputBufferSize, PULONG ReturnOutputBufferLength);
+static NTSTATUS Handle_RestoreSectionCallbacks(PUMHH_COMMAND_MESSAGE msg, ULONG InputBufferSize, PVOID OutputBuffer, ULONG OutputBufferSize, PULONG ReturnOutputBufferLength);
 // Removed: Module watch handlers - module watch now implemented in user-mode
 // static NTSTATUS Handle_RegisterModuleWatch(PUMHH_COMMAND_MESSAGE msg, ULONG InputBufferSize, PVOID OutputBuffer, ULONG OutputBufferSize, PULONG ReturnOutputBufferLength);
 // static NTSTATUS Handle_UnregisterModuleWatch(PUMHH_COMMAND_MESSAGE msg, ULONG InputBufferSize, PVOID OutputBuffer, ULONG OutputBufferSize, PULONG ReturnOutputBufferLength);
@@ -396,6 +398,12 @@ Comm_MessageNotify(
 		break;
 	case CMD_RESTORE_OB_PROCESS_CALLBACKS:
 		status = Handle_RestoreObProcessCallbacks(msg, InputBufferSize, OutputBuffer, OutputBufferSize, ReturnOutputBufferLength);
+		break;
+	case CMD_DISABLE_SECTION_CALLBACKS:
+		status = Handle_DisableSectionCallbacks(msg, InputBufferSize, OutputBuffer, OutputBufferSize, ReturnOutputBufferLength);
+		break;
+	case CMD_RESTORE_SECTION_CALLBACKS:
+		status = Handle_RestoreSectionCallbacks(msg, InputBufferSize, OutputBuffer, OutputBufferSize, ReturnOutputBufferLength);
 		break;
 
 	// Removed: Module watch commands - module watch now implemented in user-mode
@@ -2313,6 +2321,257 @@ VOID Comm_RestoreObProcessCallbacksOnUnload(void) {
 	g_ObCallbackPatchCount = 0;
 	g_ObCallbacksPatched = FALSE;
 	Log(L"ObProcessCallback: all callbacks restored on unload\n");
+}
+
+// --- Section synchronization callback patch support ---
+// Patches minifilter IRP_MJ_ACQUIRE_FOR_SECTION_SYNCHRONIZATION (0x1c) pre/post
+// callbacks found by enumerating all registered minifilters via FltEnumerateFilters
+// and walking their FLT_OPERATION_REGISTRATION arrays.
+
+// Use WDK-defined IRP_MJ_ACQUIRE_FOR_SECTION_SYNCHRONIZATION if available,
+// otherwise fall back to 0x1c (should not happen with modern WDK).
+#ifndef IRP_MJ_ACQUIRE_FOR_SECTION_SYNCHRONIZATION
+#define IRP_MJ_ACQUIRE_FOR_SECTION_SYNCHRONIZATION 0x1c
+#endif
+
+// Pre callback stub: mov eax,1; ret => FLT_PREOP_SUCCESS_NO_CALLBACK
+static const UCHAR g_MovEax1Ret[6] = { 0xB8, 0x01, 0x00, 0x00, 0x00, 0xC3 };
+// Post callback stub: xor eax,eax; ret => STATUS_SUCCESS
+static const UCHAR g_XorEaxEaxRet_Sec[3] = { 0x31, 0xC0, 0xC3 };
+
+#define MAX_SECTION_CALLBACK_PATCHES 128
+#define MAX_SECTION_OPS_PER_FILTER 64
+
+typedef struct _SECTION_CALLBACK_PATCH_ENTRY {
+	PVOID FunctionAddress;   // kernel address of Pre/Post operation function
+	UCHAR OriginalBytes[6];  // saved first N bytes (6 for pre, 3 for post)
+	ULONG SavedBytesCount;   // number of bytes saved (6 for pre, 3 for post)
+	BOOLEAN IsPatched;       // TRUE if currently patched
+} SECTION_CALLBACK_PATCH_ENTRY, *PSECTION_CALLBACK_PATCH_ENTRY;
+
+static SECTION_CALLBACK_PATCH_ENTRY g_SectionCallbackPatches[MAX_SECTION_CALLBACK_PATCHES] = { 0 };
+static ULONG g_SectionCallbackPatchCount = 0;
+static BOOLEAN g_SectionCallbacksPatched = FALSE;
+
+static NTSTATUS Handle_DisableSectionCallbacks(
+	PUMHH_COMMAND_MESSAGE msg,
+	ULONG InputBufferSize,
+	PVOID OutputBuffer,
+	ULONG OutputBufferSize,
+	PULONG ReturnOutputBufferLength
+)
+{
+	UNREFERENCED_PARAMETER(msg);
+	UNREFERENCED_PARAMETER(InputBufferSize);
+	NTSTATUS status = STATUS_SUCCESS;
+
+	if (g_SectionCallbacksPatched) {
+		if (OutputBuffer && OutputBufferSize >= sizeof(NTSTATUS))
+			RtlCopyMemory(OutputBuffer, &status, sizeof(NTSTATUS));
+		if (ReturnOutputBufferLength) *ReturnOutputBufferLength = sizeof(NTSTATUS);
+		return STATUS_SUCCESS;
+	}
+
+	// Get FLT_FILTER internal structure offsets
+	FLT_FILTER_OFFSETS fltOff = { 0 };
+	NTSTATUS offsetSt = KO_GetFltFilterOffsets(&fltOff);
+	if (!NT_SUCCESS(offsetSt)) {
+		if (offsetSt == STATUS_NOT_SUPPORTED) {
+			Log(L"SectionCallback: FLT_FILTER offsets not supported for this OS build\n");
+		} else if (offsetSt == STATUS_DRIVER_INTERNAL_ERROR) {
+			Log(L"SectionCallback: FLT_FILTER offsets not yet filled (TBD) for this OS build\n");
+		} else {
+			Log(L"SectionCallback: KO_GetFltFilterOffsets failed (0x%08X)\n", offsetSt);
+		}
+		status = offsetSt;
+		if (OutputBuffer && OutputBufferSize >= sizeof(NTSTATUS))
+			RtlCopyMemory(OutputBuffer, &status, sizeof(NTSTATUS));
+		if (ReturnOutputBufferLength) *ReturnOutputBufferLength = sizeof(NTSTATUS);
+		return status;
+	}
+
+	// Enumerate all minifilters
+	ULONG filterCount = 0;
+	NTSTATUS enumSt = FltEnumerateFilters(NULL, 0, &filterCount);
+	if (enumSt != STATUS_BUFFER_TOO_SMALL || filterCount == 0) {
+		Log(L"SectionCallback: no minifilters found or enum failed (0x%08X, count=%u)\n", enumSt, filterCount);
+		status = STATUS_NOT_FOUND;
+		if (OutputBuffer && OutputBufferSize >= sizeof(NTSTATUS))
+			RtlCopyMemory(OutputBuffer, &status, sizeof(NTSTATUS));
+		if (ReturnOutputBufferLength) *ReturnOutputBufferLength = sizeof(NTSTATUS);
+		return status;
+	}
+
+	PFLT_FILTER* filterArray = (PFLT_FILTER*)ExAllocatePoolWithTag(NonPagedPool, filterCount * sizeof(PFLT_FILTER), 'cfFS');
+	if (!filterArray) {
+		status = STATUS_INSUFFICIENT_RESOURCES;
+		if (OutputBuffer && OutputBufferSize >= sizeof(NTSTATUS))
+			RtlCopyMemory(OutputBuffer, &status, sizeof(NTSTATUS));
+		if (ReturnOutputBufferLength) *ReturnOutputBufferLength = sizeof(NTSTATUS);
+		return status;
+	}
+
+	enumSt = FltEnumerateFilters(filterArray, filterCount, &filterCount);
+	if (!NT_SUCCESS(enumSt)) {
+		Log(L"SectionCallback: FltEnumerateFilters failed (0x%08X)\n", enumSt);
+		ExFreePoolWithTag(filterArray, 'cfFS');
+		status = enumSt;
+		if (OutputBuffer && OutputBufferSize >= sizeof(NTSTATUS))
+			RtlCopyMemory(OutputBuffer, &status, sizeof(NTSTATUS));
+		if (ReturnOutputBufferLength) *ReturnOutputBufferLength = sizeof(NTSTATUS);
+		return status;
+	}
+
+	g_SectionCallbackPatchCount = 0;
+
+	for (ULONG fi = 0; fi < filterCount && g_SectionCallbackPatchCount < MAX_SECTION_CALLBACK_PATCHES; fi++) {
+		PFLT_FILTER flt = filterArray[fi];
+		if (!flt) continue;
+
+		// Read Operations (FLT_OPERATION_REGISTRATION*) directly from FLT_FILTER
+		PVOID pOps = NULL;
+		if (!Mini_ReadKernelMemory((PUCHAR)flt + fltOff.FltFilterToOps, &pOps, sizeof(PVOID))) {
+			Log(L"SectionCallback: failed to read Operations ptr from filter[%u]=0x%p\n", fi, flt);
+			continue;
+		}
+		if (!pOps) continue;
+
+		// Walk FLT_OPERATION_REGISTRATION array until IRP_MJ_OPERATION_END (0x80)
+		for (ULONG oi = 0; oi < MAX_SECTION_OPS_PER_FILTER && g_SectionCallbackPatchCount < MAX_SECTION_CALLBACK_PATCHES; oi++) {
+			// FLT_OPERATION_REGISTRATION layout (x64):
+			//   +0x00 UCHAR  MajorFunction
+			//   +0x04 ULONG  Flags
+			//   +0x08 PVOID  PreOperation
+			//   +0x10 PVOID  PostOperation
+			//   +0x18 PVOID  Reserved1
+			// Size = 0x20 (32 bytes on x64)
+			UCHAR majorFn = 0;
+			if (!Mini_ReadKernelMemory((PUCHAR)pOps + oi * 0x20, &majorFn, sizeof(UCHAR))) {
+				break;
+			}
+			if (majorFn == 0x80) break; // IRP_MJ_OPERATION_END
+
+			if (majorFn != IRP_MJ_ACQUIRE_FOR_SECTION_SYNCHRONIZATION) continue;
+
+			// Read PreOperation pointer
+			PVOID preOp = NULL;
+			Mini_ReadKernelMemory((PUCHAR)pOps + oi * 0x20 + 0x08, &preOp, sizeof(PVOID));
+
+			// Read PostOperation pointer
+			PVOID postOp = NULL;
+			Mini_ReadKernelMemory((PUCHAR)pOps + oi * 0x20 + 0x10, &postOp, sizeof(PVOID));
+
+			// Patch PreOperation: mov eax,1; ret (6 bytes)
+			if (preOp && g_SectionCallbackPatchCount < MAX_SECTION_CALLBACK_PATCHES) {
+				PSECTION_CALLBACK_PATCH_ENTRY patch = &g_SectionCallbackPatches[g_SectionCallbackPatchCount];
+				if (Mini_ReadKernelMemory(preOp, patch->OriginalBytes, 6)) {
+					patch->FunctionAddress = preOp;
+					patch->SavedBytesCount = 6;
+					patch->IsPatched = FALSE;
+
+					if (Mini_WriteKernelMemory(preOp, g_MovEax1Ret, 6)) {
+						patch->IsPatched = TRUE;
+						g_SectionCallbackPatchCount++;
+						Log(L"SectionCallback: patched PreOp at 0x%p (mov eax,1; ret)\n", preOp);
+					} else {
+						Log(L"SectionCallback: failed to patch PreOp at 0x%p\n", preOp);
+					}
+				}
+			}
+
+			// Patch PostOperation: xor eax,eax; ret (3 bytes)
+			if (postOp && postOp != preOp && g_SectionCallbackPatchCount < MAX_SECTION_CALLBACK_PATCHES) {
+				PSECTION_CALLBACK_PATCH_ENTRY patch = &g_SectionCallbackPatches[g_SectionCallbackPatchCount];
+				if (Mini_ReadKernelMemory(postOp, patch->OriginalBytes, 3)) {
+					patch->FunctionAddress = postOp;
+					patch->SavedBytesCount = 3;
+					patch->IsPatched = FALSE;
+
+					if (Mini_WriteKernelMemory(postOp, g_XorEaxEaxRet_Sec, 3)) {
+						patch->IsPatched = TRUE;
+						g_SectionCallbackPatchCount++;
+						Log(L"SectionCallback: patched PostOp at 0x%p (xor eax,eax; ret)\n", postOp);
+					} else {
+						Log(L"SectionCallback: failed to patch PostOp at 0x%p\n", postOp);
+					}
+				}
+			}
+		}
+
+		// Release the reference added by FltEnumerateFilters
+		FltObjectDereference(flt);
+	}
+
+	ExFreePoolWithTag(filterArray, 'cfFS');
+
+	g_SectionCallbacksPatched = TRUE;
+	Log(L"SectionCallback: disabled %u callback entries\n", g_SectionCallbackPatchCount);
+
+	if (OutputBuffer && OutputBufferSize >= sizeof(NTSTATUS))
+		RtlCopyMemory(OutputBuffer, &status, sizeof(NTSTATUS));
+	if (ReturnOutputBufferLength) *ReturnOutputBufferLength = sizeof(NTSTATUS);
+	return status;
+}
+
+static NTSTATUS Handle_RestoreSectionCallbacks(
+	PUMHH_COMMAND_MESSAGE msg,
+	ULONG InputBufferSize,
+	PVOID OutputBuffer,
+	ULONG OutputBufferSize,
+	PULONG ReturnOutputBufferLength
+)
+{
+	UNREFERENCED_PARAMETER(msg);
+	UNREFERENCED_PARAMETER(InputBufferSize);
+	NTSTATUS status = STATUS_SUCCESS;
+
+	if (!g_SectionCallbacksPatched) {
+		if (OutputBuffer && OutputBufferSize >= sizeof(NTSTATUS))
+			RtlCopyMemory(OutputBuffer, &status, sizeof(NTSTATUS));
+		if (ReturnOutputBufferLength) *ReturnOutputBufferLength = sizeof(NTSTATUS);
+		return STATUS_SUCCESS;
+	}
+
+	for (ULONG i = 0; i < g_SectionCallbackPatchCount; i++) {
+		PSECTION_CALLBACK_PATCH_ENTRY patch = &g_SectionCallbackPatches[i];
+		if (patch->IsPatched && patch->FunctionAddress) {
+			if (!Mini_WriteKernelMemory(patch->FunctionAddress, patch->OriginalBytes, patch->SavedBytesCount)) {
+				Log(L"SectionCallback: failed to restore at 0x%p\n", patch->FunctionAddress);
+				status = STATUS_UNSUCCESSFUL;
+			} else {
+				Log(L"SectionCallback: restored at 0x%p\n", patch->FunctionAddress);
+			}
+		}
+		patch->FunctionAddress = NULL;
+		patch->IsPatched = FALSE;
+		patch->SavedBytesCount = 0;
+	}
+
+	g_SectionCallbackPatchCount = 0;
+	g_SectionCallbacksPatched = FALSE;
+	Log(L"SectionCallback: all callbacks restored\n");
+
+	if (OutputBuffer && OutputBufferSize >= sizeof(NTSTATUS))
+		RtlCopyMemory(OutputBuffer, &status, sizeof(NTSTATUS));
+	if (ReturnOutputBufferLength) *ReturnOutputBufferLength = sizeof(NTSTATUS);
+	return status;
+}
+
+VOID Comm_RestoreSectionCallbacksOnUnload(void) {
+	if (!g_SectionCallbacksPatched) return;
+	for (ULONG i = 0; i < g_SectionCallbackPatchCount; i++) {
+		PSECTION_CALLBACK_PATCH_ENTRY patch = &g_SectionCallbackPatches[i];
+		if (patch->IsPatched && patch->FunctionAddress) {
+			Mini_WriteKernelMemory(patch->FunctionAddress, patch->OriginalBytes, patch->SavedBytesCount);
+			Log(L"SectionCallback: unload-restore at 0x%p\n", patch->FunctionAddress);
+		}
+		patch->FunctionAddress = NULL;
+		patch->IsPatched = FALSE;
+		patch->SavedBytesCount = 0;
+	}
+	g_SectionCallbackPatchCount = 0;
+	g_SectionCallbacksPatched = FALSE;
+	Log(L"SectionCallback: all callbacks restored on unload\n");
 }
 
 BOOLEAN KmhhMapKernelRegionToUser(KMHH_MAP_CONTEXT* ctx,
